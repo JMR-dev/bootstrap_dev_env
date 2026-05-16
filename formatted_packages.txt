@@ -1,0 +1,84 @@
+=== System Packages ===
+ansible
+ansible-core
+aria2
+bashtop
+build-essential
+buildah
+containerd.io
+docker-buildx-plugin
+docker-ce-cli
+docker-ce-rootless-extras
+docker-ce
+docker-compose-plugin
+dotnet-sdk-10.0
+ffmpeg-free
+gcc
+gh
+github-desktop
+google-chrome-stable
+lua
+minisign
+minikube
+obs-studio
+obsidian
+pipx
+poetry
+podman
+qemu
+restic
+rg
+shutter
+temurin-25-jdk
+vagrant
+virt-manager
+vivaldi-stable
+webcamoid
+wireshark
+yt-dlp
+zoom
+bzip2
+bzip2-devel
+gdbm-libs
+libffi-devel
+libnsl2
+libuuid-devel
+libzstd-devel
+make
+openssl-devel
+patch
+readline-devel
+sqlite
+sqlite-devel
+tk-devel
+xz-devel
+zlib-devel
+
+
+
+
+=== Flatpak Packages ===
+com.obsproject.Studio
+fr.handbrake.ghb
+io.github.webcamoid.Webcamoid
+one.ablaze.floorp
+com.vivaldi.Vivaldi
+org.darktable.Darktable
+
+=== Custom Installed Packages ===
+Name - go-1.26.3 
+URL - https://go.dev/dl/go1.26.3.linux-amd64.tar.gz
+SHA256 - 2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556
+
+Name - firecracker-v1.15.1
+URL - https://github.com/firecracker-microvm/firecracker/releases/download/v1.15.1/firecracker-v1.15.1-x86_64.tgz
+SHA256 - d4a32ab2322d887ca1bc4a4e7afa9cc35393e6362dfc2b3becb389d362e4275a
+
+Name - zig-0.16.0
+URL - https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+SHA256_URL_TAR - https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz.minisig
+MINISIGN_KEY - RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
+
+Name - nvm
+
+Name - pyenv
