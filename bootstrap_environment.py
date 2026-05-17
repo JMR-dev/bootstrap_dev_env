@@ -644,6 +644,8 @@ def _default_install_path(pkg: CustomPackage) -> Optional[Path]:
         return Path("~/.nvm")
     if n == "pyenv":
         return Path("~/.pyenv")
+    if n == "neovim":
+        return Path("/opt/nvim-linux-x86_64")
     return None
 
 
@@ -771,6 +773,78 @@ def _install_nvm() -> None:
         err("NVM installation failed")
         return
     print(f"  NVM {version} installed to ~/.nvm")
+
+
+def _install_neovim(pkg: CustomPackage, tmp: Path) -> None:
+    data = _fetch_json("https://api.github.com/repos/neovim/neovim/releases/latest")
+    if data is None:
+        return
+
+    asset_name = "nvim-linux-x86_64.tar.gz"
+    asset = next((a for a in data["assets"] if a["name"] == asset_name), None)
+    if asset is None:
+        err(f"Neovim asset {asset_name} not found")
+        return
+
+    expected_digest = asset.get("digest")
+    if not expected_digest or not expected_digest.startswith("sha256:"):
+        err("Neovim asset digest missing or invalid")
+        return
+    expected_hash = expected_digest.split(":", 1)[1]
+
+    dest = tmp / asset_name
+    if not _download(asset["browser_download_url"], dest):
+        return
+
+    actual_hash = _sha256_of(dest)
+    if actual_hash != expected_hash:
+        err(f"Neovim SHA256 mismatch: expected {expected_hash}, got {actual_hash}")
+        return
+    print("  SHA256 OK")
+
+    print("  Extracting Neovim to /opt ...")
+    run(["rm", "-rf", "/opt/nvim-linux-x86_64"], as_sudo=True)
+    run(["tar", "-C", "/opt", "-xzf", str(dest)], as_sudo=True)
+
+    profile_line = 'export PATH="$PATH:/opt/nvim-linux-x86_64/bin"'
+    profile_script = "/etc/profile.d/neovim.sh"
+    run(["bash", "-c",
+         f"grep -qxF {profile_line!r} {profile_script} 2>/dev/null || "
+         f"echo {profile_line!r} >> {profile_script}"],
+        as_sudo=True, check=False)
+    print(f"  Neovim installed to /opt/nvim-linux-x86_64")
+
+
+def _clone_nvim_config() -> None:
+    config_dir = Path.home() / ".config" / "nvim"
+    repo_url = "git@github.com:JMR-dev/nvim-config.git"
+
+    print(f"\n[Neovim] Setting up configuration from {repo_url} ...")
+
+    if config_dir.exists():
+        print(f"  Removing existing configuration at {config_dir} ...")
+        shutil.rmtree(config_dir)
+
+    config_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"  Cloning to {config_dir} ...")
+    # We use a temp clone and then move to ensure we handle the "rename" part of the request
+    # although cloning directly to 'nvim' is effectively the same.
+    # The user asked: "clones my nvim config to $HOME/.config/$REPO and renames the repo root folder to just nvim"
+    repo_name = repo_url.split("/")[-1].replace(".git", "")
+    temp_clone = config_dir.parent / repo_name
+
+    if temp_clone.exists():
+        shutil.rmtree(temp_clone)
+
+    result = run(["git", "clone", repo_url, str(temp_clone)], check=False)
+    if result.returncode != 0:
+        err("Neovim configuration clone failed")
+        return
+
+    print(f"  Renaming {temp_clone.name} to {config_dir.name} ...")
+    temp_clone.rename(config_dir)
+    print(f"  Neovim configuration ready at {config_dir}")
 
 
 def ensure_node_lts() -> None:
@@ -905,6 +979,10 @@ def install_custom_packages(to_install: list[CustomPackage]) -> None:
             continue
         if name_lower == "pyenv":
             _install_pyenv()
+            continue
+        if name_lower == "neovim":
+            with tempfile.TemporaryDirectory() as tmp_str:
+                _install_neovim(pkg, Path(tmp_str))
             continue
 
         if not pkg.url:
@@ -1200,6 +1278,7 @@ def main() -> None:
 
     if args.only is None:
         check_and_setup_ssh()
+        _clone_nvim_config()
 
     if pyenv_thread is not None:
         if pyenv_thread.is_alive():

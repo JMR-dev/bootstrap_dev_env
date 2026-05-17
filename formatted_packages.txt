@@ -15,6 +15,7 @@ dotnet-sdk-10.0
 ffmpeg-free
 gcc
 gh
+git
 github-desktop
 google-chrome-stable
 lua
@@ -69,6 +70,9 @@ org.darktable.Darktable
 Name - go-1.26.3 
 URL - https://go.dev/dl/go1.26.3.linux-amd64.tar.gz
 SHA256 - 2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556
+
+Name - neovim
+URL - https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz
 
 Name - firecracker-v1.15.1
 URL - https://github.com/firecracker-microvm/firecracker/releases/download/v1.15.1/firecracker-v1.15.1-x86_64.tgz
