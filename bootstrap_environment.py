@@ -8,7 +8,7 @@ Sections handled:
   === Custom Installed Packages ===  — downloaded, verified, extracted
 
 Usage:
-  sudo python3 bootstrap_environment.py [--only system|flatpak|custom]
+  sudo python3 bootstrap_environment.py [--only system|flatpak|custom] [--no-gui]
 """
 
 import argparse
@@ -188,6 +188,8 @@ def is_system_pkg_installed(pkg: str) -> bool:
     return False
 
 def is_flatpak_installed(app_id: str) -> bool:
+    if not has_cmd("flatpak"):
+        return False
     return subprocess.run(["flatpak", "info", app_id], capture_output=True).returncode == 0
 
 def is_special_pkg_installed(pkg: str) -> bool:
@@ -391,6 +393,20 @@ _REPO_GROUPS: list[tuple[set[str], callable]] = [
 
 _SPECIAL_PKGS = {"github-desktop", "zoom", "obsidian", "minikube", "bashtop", "pipx", "poetry"}
 
+# GUI apps — skipped when --no-gui is passed (headless environments).
+_GUI_SYSTEM_PKGS = {
+    "github-desktop",
+    "google-chrome-stable",
+    "obs-studio",
+    "obsidian",
+    "shutter",
+    "virt-manager",
+    "vivaldi-stable",
+    "webcamoid",
+    "wireshark",
+    "zoom",
+}
+
 
 def _install_github_desktop(tmp: Path) -> None:
     data = _fetch_json("https://api.github.com/repos/shiftkey/desktop/releases/latest")
@@ -583,8 +599,14 @@ def install_flatpak_packages(to_install: list[str]) -> None:
     print("\n=== Flatpak Packages ===")
 
     if not has_cmd("flatpak"):
-        print("  flatpak not found — installing ...")
-        run([PKG_MGR, "install", "-y", "flatpak"], as_sudo=True)
+        print("  flatpak is not installed.")
+        if not _yn("  Install flatpak now? [y/N] "):
+            warn("flatpak not installed — skipping Flatpak section")
+            return
+        result = run([PKG_MGR, "install", "-y", "flatpak"], as_sudo=True, check=False)
+        if result.returncode != 0 or not has_cmd("flatpak"):
+            err("flatpak installation failed — skipping Flatpak section")
+            return
 
     run(
         ["flatpak", "remote-add", "--if-not-exists", "flathub",
@@ -981,7 +1003,7 @@ def print_check_summary(sys_c: dict, flat_c: dict, cust_c: dict, only: Optional[
             print(f"  [REMAP]       remapped: {pairs}")
         total += n
 
-    if only in (None, "flatpak"):
+    if only in (None, "flatpak") and flat_c:
         to   = flat_c["to_install"]
         ok   = flat_c["already_installed"]
         print("\nFlatpak packages:")
@@ -1022,21 +1044,8 @@ def _gh_logged_in() -> bool:
 
 
 def _offer_github_upload(pub_keys: list[Path]) -> None:
-    if not has_cmd("gh"):
-        print("  gh CLI not installed — skipping GitHub upload.")
-        return
-
-    if not _gh_logged_in():
-        print("\n  Not logged in to GitHub CLI.")
-        if not _yn("  Log in now? [y/N] "):
-            return
-        result = subprocess.run(["gh", "auth", "login"], check=False)
-        if result.returncode != 0:
-            err("gh auth login failed — skipping key upload.")
-            return
-
     if not pub_keys:
-        print("  No new public key found to upload.")
+        print("  No public key found to upload.")
         return
 
     pub_key = max(pub_keys, key=lambda p: p.stat().st_mtime)
@@ -1049,38 +1058,23 @@ def _offer_github_upload(pub_keys: list[Path]) -> None:
     except (EOFError, KeyboardInterrupt):
         title = default_title
 
-    result = subprocess.run(
-        ["gh", "ssh-key", "add", str(pub_key), "--title", title], check=False
-    )
-    if result.returncode != 0:
-        err("Failed to upload SSH key to GitHub")
-    else:
-        print("  SSH key uploaded to GitHub.")
-
 
 def check_and_setup_ssh() -> None:
-    ssh_dir = Path.home() / ".ssh"
-
-    # Check for private-key files by name only — contents are never read.
-    existing_keys = (
-        [p for p in ssh_dir.glob("id_*")
-         if p.is_file() and p.suffix != ".pub"]
-        if ssh_dir.exists() else []
-    )
-    if existing_keys:
-        print(f"\n[SSH] Existing key(s) found in {ssh_dir} — skipping creation.")
+    if not has_cmd("gh"):
+        print("\n[GitHub CLI] gh not installed — skipping authentication.")
         return
 
-    print(f"\n[SSH] No SSH keys found in {ssh_dir}.")
-    if not _yn("  Create a new SSH key? [y/N] "):
+    if _gh_logged_in():
+        print("\n[GitHub CLI] Already authenticated.")
         return
 
-    ssh_dir.mkdir(mode=0o700, exist_ok=True)
-    pub_before = set(ssh_dir.glob("*.pub"))
-    subprocess.run(["ssh-keygen", "-t", "ed25519"], check=False)
-    new_pub_keys = sorted(set(ssh_dir.glob("*.pub")) - pub_before)
+    if not _yn("\n[GitHub CLI] Would you like to authenticate the GitHub CLI? [y/N] "):
+        return
 
-    _offer_github_upload(new_pub_keys)
+    result = subprocess.run(["gh", "auth", "login"], check=False)
+    if result.returncode != 0:
+        err("gh auth login failed — skipping key upload.")
+        return
 
 # ── file parser ───────────────────────────────────────────────────────────────
 
@@ -1143,6 +1137,9 @@ def main() -> None:
     )
     ap.add_argument("--only", choices=["system", "flatpak", "custom"],
                     help="Install only the named section")
+    ap.add_argument("--no-gui", action="store_true",
+                    help="Skip GUI applications (suitable for headless environments). "
+                         "Excludes GUI system packages and the entire Flatpak section.")
     ap.add_argument("--file", default=str(PACKAGES_FILE), metavar="PATH",
                     help="Path to packages file (default: formatted_packages.txt next to this script)")
     args = ap.parse_args()
@@ -1155,11 +1152,22 @@ def main() -> None:
 
     print(f"Architecture:    {ARCH}")
     print(f"Package manager: {PKG_MGR}")
+    if args.no_gui:
+        print("Mode:            headless (--no-gui) — skipping GUI apps and Flatpak")
     print("Checking installed packages ...")
 
-    sys_c  = check_system_packages(system_pkgs)  if args.only in (None, "system")  else {}
-    flat_c = check_flatpak_packages(flatpak_pkgs) if args.only in (None, "flatpak") else {}
-    cust_c = check_custom_packages(custom_pkgs)  if args.only in (None, "custom")  else {}
+    if args.no_gui:
+        skipped_gui = [p for p in system_pkgs if p in _GUI_SYSTEM_PKGS]
+        system_pkgs = [p for p in system_pkgs if p not in _GUI_SYSTEM_PKGS]
+        if skipped_gui:
+            print(f"  [NO-GUI] Skipping GUI system packages: {_fmt(skipped_gui)}")
+        flatpak_pkgs = []
+
+    do_flatpak = args.only in (None, "flatpak") and not args.no_gui
+
+    sys_c  = check_system_packages(system_pkgs)   if args.only in (None, "system")  else {}
+    flat_c = check_flatpak_packages(flatpak_pkgs) if do_flatpak                     else {}
+    cust_c = check_custom_packages(custom_pkgs)   if args.only in (None, "custom")  else {}
 
     total = print_check_summary(sys_c, flat_c, cust_c, args.only)
 
@@ -1181,7 +1189,7 @@ def main() -> None:
     if args.only in (None, "system"):
         install_system_packages(sys_c["to_install_regular"], sys_c["to_install_special"])
 
-    if args.only in (None, "flatpak"):
+    if do_flatpak:
         install_flatpak_packages(flat_c["to_install"])
 
     pyenv_thread: Optional[threading.Thread] = None
