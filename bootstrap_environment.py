@@ -3,12 +3,29 @@
 Bootstrap packages declared in formatted_packages.py.
 
 Sections handled:
-  System Packages  — installed via dnf or apt-get
-  Flatpak Packages — installed via flatpak from Flathub (skipped with --no-gui)
+  System Packages  — installed via dnf, apt-get, or brew (macOS)
+  Flatpak Packages — installed via flatpak from Flathub (Linux only;
+                     skipped with --no-gui and skipped entirely on macOS)
   Custom Packages  — downloaded, verified, extracted
+  macOS firecracker VM — provisions a Fedora cloud image under a
+                     hypervisor that supports nested virtualization,
+                     installs firecracker inside it, and adds a
+                     `firecracker()` wrapper to ~/.zshrc that proxies
+                     invocations via SSH. Backend is picked automatically:
+                       • Apple Silicon M3+ / macOS 15+: QEMU/HVF (el2=on)
+                       • Intel Mac:                    VirtualBox (nested VT-x)
+                       • Apple Silicon M1/M2:          skipped (no local
+                                                       nested-virt option)
+                     Suppress with --no-vm.
+
+OS detection is automatic. On macOS the first actions are to install the
+Xcode Command Line Tools and Homebrew, which is then used as the system
+package manager.
 
 Usage:
-  sudo python3 bootstrap_environment.py [--only system|flatpak|custom] [--no-gui]
+  Linux:  sudo python3 bootstrap_environment.py [--only system|flatpak|custom] [--no-gui]
+  macOS:       python3 bootstrap_environment.py [--only system|custom] [--no-gui] [--no-vm]
+               (do NOT use sudo on macOS — Homebrew refuses to run as root)
 """
 
 import argparse
@@ -97,6 +114,25 @@ def shell(
 def has_cmd(name: str) -> bool:
     return shutil.which(name) is not None
 
+# ── OS detection ──────────────────────────────────────────────────────────────
+
+def detect_os() -> str:
+    s = platform.system()
+    if s == "Linux":
+        return "linux"
+    if s == "Darwin":
+        return "macos"
+    sys.exit(f"Unsupported OS: {s} (supports Linux, Darwin)")
+
+OS = detect_os()
+IS_MACOS = OS == "macos"
+
+# Per-OS substitutions used by download URL construction (vendors disagree
+# on the canonical OS token — Go uses "darwin", Zig/Neovim use "macos").
+_OS_GO   = {"linux": "linux", "macos": "darwin"}
+_OS_ZIG  = {"linux": "linux", "macos": "macos"}
+_OS_NVIM = {"linux": "linux", "macos": "macos"}
+
 # ── architecture detection ────────────────────────────────────────────────────
 
 # Tokens commonly seen in download URLs / asset names per architecture.
@@ -122,8 +158,16 @@ _ARCH_DEB      = {"x86_64": "amd64",  "aarch64": "arm64"}
 _ARCH_NVIM     = {"x86_64": "x86_64", "aarch64": "arm64"}
 
 def _url_format(template: str, version: Optional[str]) -> str:
-    """Interpolate {version}, {arch}, {arch_go} into a URL template."""
-    return template.format(version=version or "", arch=ARCH, arch_go=_ARCH_GO[ARCH])
+    """Interpolate {version}, {arch}, {arch_go}, {os}, {os_go}, {os_zig}, {os_nvim}."""
+    return template.format(
+        version=version or "",
+        arch=ARCH,
+        arch_go=_ARCH_GO[ARCH],
+        os=OS,
+        os_go=_OS_GO[OS],
+        os_zig=_OS_ZIG[OS],
+        os_nvim=_OS_NVIM[OS],
+    )
 
 def _arch_matches(name: str, arch: str = ARCH) -> bool:
     n = name.lower()
@@ -140,6 +184,12 @@ def _has_other_arch_token(name: str) -> bool:
 
 def check_sudo() -> None:
     if os.geteuid() == 0:
+        if IS_MACOS:
+            sys.exit(
+                "Do not run this script with sudo on macOS — Homebrew refuses "
+                "to run as root. Re-run as your regular user; the script will "
+                "request sudo for the specific operations that need it."
+            )
         return
     if not has_cmd("sudo"):
         sys.exit("sudo is required but not installed.")
@@ -148,13 +198,70 @@ def check_sudo() -> None:
     if result.returncode != 0:
         sys.exit("sudo authentication failed.")
 
+# ── macOS prerequisites: Xcode CLT + Homebrew ─────────────────────────────────
+
+def ensure_xcode_clt() -> None:
+    """Install the Xcode Command Line Tools if missing. macOS only."""
+    if not IS_MACOS:
+        return
+    result = subprocess.run(["xcode-select", "-p"], capture_output=True, check=False)
+    if result.returncode == 0:
+        print(f"[Xcode CLT] Already installed at {result.stdout.decode().strip()}")
+        return
+    print("[Xcode CLT] Installing Xcode Command Line Tools ...")
+    print("           A GUI dialog will appear — click 'Install' to proceed.")
+    subprocess.run(["xcode-select", "--install"], check=False)
+    print("           Waiting for installation to complete ...")
+    while subprocess.run(["xcode-select", "-p"], capture_output=True).returncode != 0:
+        time.sleep(5)
+    print("[Xcode CLT] Installation complete.")
+
+
+def _brew_prefix() -> str:
+    """Standard Homebrew prefix for the current architecture."""
+    return "/opt/homebrew" if ARCH == "aarch64" else "/usr/local"
+
+
+def ensure_homebrew() -> None:
+    """Install Homebrew if missing and prime PATH for this process. macOS only."""
+    if not IS_MACOS:
+        return
+    if has_cmd("brew"):
+        print(f"[Homebrew] Already installed at {shutil.which('brew')}")
+        return
+    print("[Homebrew] Installing Homebrew ...")
+    installer = (
+        'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL '
+        'https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    )
+    if shell(installer, check=False).returncode != 0:
+        sys.exit("Homebrew installation failed")
+
+    brew_bin_dir = Path(_brew_prefix()) / "bin"
+    brew_path = brew_bin_dir / "brew"
+    if not brew_path.exists():
+        sys.exit(f"Homebrew installed but brew not found at {brew_path}")
+
+    os.environ["PATH"] = f"{brew_bin_dir}:{os.environ.get('PATH', '')}"
+
+    shellenv_line = f'eval "$({brew_path} shellenv)"'
+    run(["bash", "-c",
+         f"grep -qxF {shellenv_line!r} /etc/zprofile 2>/dev/null || "
+         f"echo {shellenv_line!r} >> /etc/zprofile"],
+        as_sudo=True, check=False)
+    print(f"[Homebrew] Installed at {_brew_prefix()}; added shellenv to /etc/zprofile")
+
 # ── package manager detection ─────────────────────────────────────────────────
 
 def detect_pkg_mgr() -> str:
+    if IS_MACOS:
+        # brew may not be installed yet — ensure_homebrew() runs before any
+        # call that actually invokes brew.
+        return "brew"
     for mgr in ("dnf", "apt-get"):
         if has_cmd(mgr):
             return mgr
-    sys.exit("No supported package manager found (expected dnf or apt-get).")
+    sys.exit("No supported package manager found (expected dnf, apt-get, or brew on macOS).")
 
 PKG_MGR = detect_pkg_mgr()
 
@@ -215,6 +322,16 @@ def is_system_pkg_installed(pkg: str) -> bool:
             capture_output=True, text=True, check=False,
         )
         return "install ok installed" in result.stdout
+    elif PKG_MGR == "brew":
+        if not has_cmd("brew"):
+            return False
+        if subprocess.run(["brew", "list", "--formula", pkg],
+                          capture_output=True, check=False).returncode == 0:
+            return True
+        if subprocess.run(["brew", "list", "--cask", pkg],
+                          capture_output=True, check=False).returncode == 0:
+            return True
+        return False
     return False
 
 def is_flatpak_installed(app_id: str) -> bool:
@@ -250,6 +367,63 @@ _OVERRIDES: dict[str, dict[str, Optional[list[str]]]] = {
         "ffmpeg-free":     ["ffmpeg"],                    # Fedora-specific name
         "rg":              ["ripgrep"],
     },
+    "brew": {
+        # Provided by Xcode CLT or the OS — no-op on macOS.
+        "build-essential":           None,
+        "gcc":                       None,   # `gcc` from brew is real GCC; clang from CLT suffices
+        "make":                      None,
+        "patch":                     None,
+        "zsh":                       None,   # built-in
+        "ansible-core":              None,   # bundled with `ansible`
+        # Docker on macOS ships as Docker Desktop (cask); the Linux package
+        # split into containerd/buildx/cli/etc. doesn't apply.
+        "containerd.io":             None,
+        "docker-buildx-plugin":      None,
+        "docker-ce-cli":             None,
+        "docker-ce-rootless-extras": None,
+        "docker-ce":                 ["docker"],
+        "docker-compose-plugin":     ["docker-compose"],
+        # Name fixups.
+        "dotnet-sdk-10.0":           ["dotnet"],
+        "ffmpeg-free":               ["ffmpeg"],
+        "github-desktop":            ["github"],
+        "google-chrome-stable":      ["google-chrome"],
+        "obs-studio":                ["obs"],
+        "rg":                        ["ripgrep"],
+        "temurin-25-jdk":            ["temurin"],
+        "vivaldi-stable":            ["vivaldi"],
+        # Linux-only apps.
+        "shutter":                   None,
+        "virt-manager":              None,
+        "webcamoid":                 None,
+        # Python build deps — macOS SDK / brew formulas already bundle headers.
+        "bzip2-devel":               None,
+        "gdbm-libs":                 ["gdbm"],
+        "libffi-devel":              ["libffi"],
+        "libnsl2":                   None,
+        "libuuid-devel":             None,
+        "libzstd-devel":             ["zstd"],
+        "openssl-devel":             ["openssl@3"],
+        "readline-devel":            ["readline"],
+        "sqlite-devel":              None,
+        "tk-devel":                  ["tcl-tk"],
+        "xz-devel":                  None,
+        "zlib-devel":                None,
+    },
+}
+
+# Brew packages that must be installed via `brew install --cask` rather than
+# as formulae. After _OVERRIDES are applied, these are the resolved names.
+_BREW_CASKS: set[str] = {
+    "docker",
+    "github",
+    "google-chrome",
+    "obs",
+    "obsidian",
+    "temurin",
+    "vagrant",
+    "vivaldi",
+    "zoom",
 }
 
 def resolve_system_pkgs(names: list[str]) -> tuple[list[str], list[str]]:
@@ -421,7 +595,10 @@ _REPO_GROUPS: list[tuple[set[str], callable]] = [
 
 # ── special package installers ────────────────────────────────────────────────
 
-_SPECIAL_PKGS = {"github-desktop", "zoom", "obsidian", "minikube", "bashtop", "pipx", "poetry"}
+_SPECIAL_PKGS: set[str] = (
+    set() if IS_MACOS
+    else {"github-desktop", "zoom", "obsidian", "minikube", "bashtop", "pipx", "poetry"}
+)
 
 # GUI apps — skipped when --no-gui is passed (headless environments).
 _GUI_SYSTEM_PKGS = {
@@ -556,12 +733,7 @@ def _install_bashtop(_tmp: Path) -> None:
         err("bashtop 'make install' failed")
         return
     # Also expose the clone dir on PATH so `bashtop` from source works.
-    profile_line = f"export PATH=$PATH:{clone_dir}"
-    profile_script = "/etc/profile.d/bashtop.sh"
-    run(["bash", "-c",
-         f"grep -qxF {profile_line!r} {profile_script} 2>/dev/null || "
-         f"echo {profile_line!r} >> {profile_script}"],
-        as_sudo=True, check=False)
+    _append_profile_line("bashtop", f"export PATH=$PATH:{clone_dir}")
     print(f"  bashtop installed. Clone at {clone_dir}, binary at /usr/local/bin/bashtop")
 
 
@@ -603,6 +775,18 @@ def install_special_pkg(pkg: str, tmp: Path) -> None:
 
 def install_system_packages(to_install_regular: list[str], to_install_special: list[str]) -> None:
     print("\n=== System Packages ===")
+
+    if PKG_MGR == "brew":
+        for pkg in to_install_regular:
+            if pkg in _BREW_CASKS:
+                cmd = ["brew", "install", "--cask", pkg]
+            else:
+                cmd = ["brew", "install", pkg]
+            result = run(cmd, check=False)
+            if result.returncode != 0:
+                err(f"System package failed to install: {pkg}")
+        # No special packages on macOS — brew covers all of them.
+        return
 
     seen_repos: set[int] = set()
     for pkg in to_install_regular:
@@ -685,9 +869,22 @@ _DEFAULT_INSTALL_PATHS: dict[str, Path] = {
     "zig":         Path("/usr/local/bin/zig"),
     "nvm":         Path("~/.nvm"),
     "pyenv":       Path("~/.pyenv"),
-    "neovim":      Path(f"/opt/nvim-linux-{_ARCH_NVIM[ARCH]}"),
+    "neovim":      Path(f"/opt/nvim-{_OS_NVIM[OS]}-{_ARCH_NVIM[ARCH]}"),
     "oh-my-zsh":   Path("~/.oh-my-zsh"),
 }
+
+
+def _append_profile_line(script_name: str, line: str) -> None:
+    """Append a PATH/env line to a system-wide login-shell profile, idempotently.
+
+    On Linux we drop a dedicated file under /etc/profile.d/; macOS has no such
+    directory, so we append to /etc/zprofile (sourced by every zsh login shell).
+    """
+    target = "/etc/zprofile" if IS_MACOS else f"/etc/profile.d/{script_name}.sh"
+    run(["bash", "-c",
+         f"grep -qxF {line!r} {target} 2>/dev/null || "
+         f"echo {line!r} >> {target}"],
+        as_sudo=True, check=False)
 
 def _default_install_path(pkg: CustomPackage) -> Optional[Path]:
     return _DEFAULT_INSTALL_PATHS.get(pkg.name.lower())
@@ -773,12 +970,7 @@ def _install_go(archive: Path) -> None:
         print(f"  Removing existing Go at {go_root} ...")
         run(["rm", "-rf", str(go_root)], as_sudo=True)
     run(["tar", "-C", "/usr/local", "-xzf", str(archive)], as_sudo=True)
-    profile_line = "export PATH=$PATH:/usr/local/go/bin"
-    profile_script = "/etc/profile.d/local_go.sh"
-    run(["bash", "-c",
-         f"grep -qxF {profile_line!r} {profile_script} 2>/dev/null || "
-         f"echo {profile_line!r} >> {profile_script}"],
-        as_sudo=True, check=False)
+    _append_profile_line("local_go", "export PATH=$PATH:/usr/local/go/bin")
     print(f"  Go installed to {go_root}")
 
 
@@ -805,7 +997,7 @@ def _install_zig(pkg: CustomPackage, archive: Path, tmp: Path) -> None:
     if zig_dir.exists():
         run(["rm", "-rf", str(zig_dir)], as_sudo=True)
     run(["tar", "-C", str(parent), "-xJf", str(archive)], as_sudo=True)
-    extracted = next(parent.glob(f"zig-{ARCH}-linux*"), None)
+    extracted = next(parent.glob(f"zig-{ARCH}-{_OS_ZIG[OS]}*"), None)
     if extracted and extracted != zig_dir:
         run(["mv", str(extracted), str(zig_dir)], as_sudo=True)
     symlink = Path("/usr/local/bin/zig")
@@ -906,7 +1098,8 @@ def _install_neovim(pkg: CustomPackage, tmp: Path) -> None:
         return
 
     arch_token = _ARCH_NVIM[ARCH]
-    asset_name = f"nvim-linux-{arch_token}.tar.gz"
+    os_token = _OS_NVIM[OS]
+    asset_name = f"nvim-{os_token}-{arch_token}.tar.gz"
     asset = next((a for a in data["assets"] if a["name"] == asset_name), None)
     if asset is None:
         err(f"Neovim asset {asset_name} not found")
@@ -928,17 +1121,13 @@ def _install_neovim(pkg: CustomPackage, tmp: Path) -> None:
         return
     print("  SHA256 OK")
 
-    install_dir = f"/opt/nvim-linux-{arch_token}"
+    install_dir = f"/opt/nvim-{os_token}-{arch_token}"
     print(f"  Extracting Neovim to /opt ...")
+    run(["mkdir", "-p", "/opt"], as_sudo=True, check=False)
     run(["rm", "-rf", install_dir], as_sudo=True)
     run(["tar", "-C", "/opt", "-xzf", str(dest)], as_sudo=True)
 
-    profile_line = f'export PATH="$PATH:{install_dir}/bin"'
-    profile_script = "/etc/profile.d/neovim.sh"
-    run(["bash", "-c",
-         f"grep -qxF {profile_line!r} {profile_script} 2>/dev/null || "
-         f"echo {profile_line!r} >> {profile_script}"],
-        as_sudo=True, check=False)
+    _append_profile_line("neovim", f'export PATH="$PATH:{install_dir}/bin"')
     print(f"  Neovim installed to {install_dir}")
 
 
@@ -1147,7 +1336,7 @@ def _resolve_latest_go(pkg: CustomPackage) -> Optional[tuple[str, str]]:
     version = raw_version[2:] if raw_version.startswith("go") else raw_version
     if not version:
         return None
-    archive_name = f"go{version}.linux-{_ARCH_GO[ARCH]}.tar.gz"
+    archive_name = f"go{version}.{_OS_GO[OS]}-{_ARCH_GO[ARCH]}.tar.gz"
     entry = next(
         (f for f in latest.get("files", [])
          if f.get("filename") == archive_name and f.get("kind") == "archive"),
@@ -1159,6 +1348,8 @@ def _resolve_latest_go(pkg: CustomPackage) -> Optional[tuple[str, str]]:
 
 
 def _resolve_latest_firecracker(pkg: CustomPackage) -> Optional[tuple[str, str]]:
+    if IS_MACOS:
+        return None  # firecracker is Linux-only; install_custom_packages skips it
     data = _fetch_json(
         "https://api.github.com/repos/firecracker-microvm/firecracker/releases/latest"
     )
@@ -1189,7 +1380,7 @@ def _resolve_latest_zig(_pkg: CustomPackage) -> Optional[tuple[str, str]]:
         return None
     stable.sort(key=lambda v: tuple(int(x) for x in v.split(".")))
     version = stable[-1]
-    entry = data[version].get(f"{ARCH}-linux")
+    entry = data[version].get(f"{ARCH}-{_OS_ZIG[OS]}")
     if not entry or "shasum" not in entry:
         return None
     return version, entry["shasum"]
@@ -1432,6 +1623,521 @@ def check_and_setup_ssh() -> None:
         err("gh auth login failed — skipping key upload.")
         return
 
+# ── macOS: Fedora VM + firecracker bridge ────────────────────────────────────
+#
+# Firecracker is Linux-only (needs KVM). On macOS we provision a Fedora cloud
+# VM via QEMU/HVF, install firecracker inside it, and expose a `firecracker`
+# zsh function on the host that proxies invocations over SSH into the VM.
+
+_VM_DIR = Path.home() / ".firecracker-vm"
+_VM_SSH_PORT = 2222
+_VM_USER = "fc"
+_VM_QCOW2_NAME = "fedora.qcow2"
+_VM_SEED_ISO_NAME = "seed.iso"
+_VM_PID_NAME = "vm.pid"
+_VM_KEY_NAME = "id_ed25519"
+_FIRECRACKER_FN_BEGIN = "# >>> firecracker-vm wrapper >>>"
+_FIRECRACKER_FN_END   = "# <<< firecracker-vm wrapper <<<"
+
+
+def _latest_fedora_cloud_image() -> Optional[tuple[str, str, str]]:
+    """Return (filename, qcow2_url, checksum_url) for the latest Fedora cloud qcow2.
+
+    Walks the Fedora mirror directory listing from newest release downward,
+    and returns the first arch-matching qcow2 it finds.
+    """
+    base = "https://dl.fedoraproject.org/pub/fedora/linux/releases/"
+    listing = _fetch_text(base)
+    if not listing:
+        return None
+    versions = sorted(
+        {int(m.group(1)) for m in re.finditer(r'href="(\d+)/?"', listing)},
+        reverse=True,
+    )
+    for ver in versions:
+        images_url = f"{base}{ver}/Cloud/{ARCH}/images/"
+        idx = _fetch_text(images_url)
+        if not idx:
+            continue
+        qcow = re.search(
+            rf'href="(Fedora-Cloud-Base[A-Za-z0-9_-]*-{ver}-[\d.]+\.{ARCH}\.qcow2)"',
+            idx,
+        )
+        ck = re.search(r'href="([^"]*CHECKSUM)"', idx)
+        if not qcow or not ck:
+            continue
+        return qcow.group(1), images_url + qcow.group(1), images_url + ck.group(1)
+    return None
+
+
+def _verify_fedora_qcow2(qcow2: Path, checksum_url: str) -> bool:
+    text = _fetch_text(checksum_url)
+    if not text:
+        return False
+    expected: Optional[str] = None
+    for line in text.splitlines():
+        m = re.match(rf"SHA256 \({re.escape(qcow2.name)}\) = ([0-9a-fA-F]+)", line)
+        if m:
+            expected = m.group(1).lower()
+            break
+    if expected is None:
+        err(f"No SHA256 entry for {qcow2.name} in checksum file")
+        return False
+    print("  Verifying SHA256 (this can take a minute) ...")
+    if _sha256_of(qcow2).lower() != expected:
+        err(f"Fedora image SHA256 mismatch (got {_sha256_of(qcow2)}, expected {expected})")
+        return False
+    print("  SHA256 OK")
+    return True
+
+
+def _download_fedora_image(qcow2_url: str, dest: Path) -> bool:
+    """Stream the Fedora qcow2 via curl (progress bar, resumable)."""
+    if not has_cmd("curl"):
+        return _download(qcow2_url, dest)
+    print(f"  Downloading {dest.name} ...")
+    result = run(["curl", "-L", "--fail", "-#",
+                  "-o", str(dest), qcow2_url], check=False)
+    return result.returncode == 0
+
+
+_FIRECRACKER_USERDATA = """#cloud-config
+hostname: firecracker-vm
+users:
+  - name: {user}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - {pubkey}
+ssh_pwauth: false
+packages:
+  - curl
+  - tar
+  - qemu-kvm
+write_files:
+  - path: /usr/local/sbin/install-firecracker.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      ARCH=$(uname -m)
+      TAG=$(curl -fsSL https://api.github.com/repos/firecracker-microvm/firecracker/releases/latest \\
+            | grep -oE '"tag_name":[[:space:]]*"v[^"]+"' | head -1 \\
+            | sed -E 's/.*"v([^"]+)"/\\1/')
+      cd /tmp
+      curl -fsSL -o fc.tgz \\
+        "https://github.com/firecracker-microvm/firecracker/releases/download/v${{TAG}}/firecracker-v${{TAG}}-${{ARCH}}.tgz"
+      tar -xzf fc.tgz
+      BIN=$(find . -maxdepth 3 -type f -name "firecracker-v${{TAG}}-${{ARCH}}" ! -name '*.debug' | head -1)
+      install -m 0755 "$BIN" /usr/local/bin/firecracker
+      touch /var/lib/firecracker-ready
+runcmd:
+  - /usr/local/sbin/install-firecracker.sh
+"""
+
+
+def _write_cloud_init_seed(seed_dir: Path, pubkey: str) -> None:
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    (seed_dir / "user-data").write_text(
+        _FIRECRACKER_USERDATA.format(user=_VM_USER, pubkey=pubkey.strip())
+    )
+    (seed_dir / "meta-data").write_text(
+        "instance-id: firecracker-vm\nlocal-hostname: firecracker-vm\n"
+    )
+
+
+def _build_seed_iso(seed_dir: Path, iso_path: Path) -> bool:
+    if iso_path.exists():
+        iso_path.unlink()
+    result = run(
+        ["hdiutil", "makehybrid", "-iso", "-joliet",
+         "-default-volume-name", "cidata",
+         "-o", str(iso_path), str(seed_dir)],
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _write_qemu_start_script() -> Path:
+    """Write the QEMU launcher. Used only on Apple Silicon M3+ / macOS 15+,
+    where HVF exposes nested virtualization via `-cpu host,el2=on`."""
+    brew_share = Path(_brew_prefix()) / "share" / "qemu"
+    script_path = _VM_DIR / "vm-start.sh"
+
+    edk_code = brew_share / "edk2-aarch64-code.fd"
+    # The brew qemu package ships a generic arm vars template.
+    edk_vars_template = brew_share / "edk2-arm-vars.fd"
+    qemu_block = f"""\
+# Ensure a writable NVRAM file exists (UEFI vars persist here).
+if [[ ! -f edk2-aarch64-vars.fd ]]; then
+    if [[ -f "{edk_vars_template}" ]]; then
+        cp "{edk_vars_template}" edk2-aarch64-vars.fd
+    else
+        truncate -s 64M edk2-aarch64-vars.fd
+    fi
+fi
+
+exec qemu-system-aarch64 \\
+    -machine virt,accel=hvf,highmem=on \\
+    -cpu host,el2=on \\
+    -smp 2 -m 2048 \\
+    -drive if=pflash,format=raw,readonly=on,file="{edk_code}" \\
+    -drive if=pflash,format=raw,file=edk2-aarch64-vars.fd \\
+    -drive file={_VM_QCOW2_NAME},if=virtio,format=qcow2 \\
+    -drive file={_VM_SEED_ISO_NAME},format=raw,if=virtio,readonly=on \\
+    -display none -serial file:vm.log \\
+    -netdev user,id=net0,hostfwd=tcp::{_VM_SSH_PORT}-:22 \\
+    -device virtio-net-device,netdev=net0 \\
+    -daemonize -pidfile {_VM_PID_NAME}
+"""
+
+    script = f"""#!/usr/bin/env bash
+# Start the Fedora-on-QEMU VM that backs the host `firecracker` zsh function.
+# Nested virt enabled via el2=on (requires Apple M3+ on macOS 15 Sequoia+).
+set -euo pipefail
+cd "{_VM_DIR}"
+if [[ -f {_VM_PID_NAME} ]] && kill -0 "$(cat {_VM_PID_NAME})" 2>/dev/null; then
+    exit 0
+fi
+rm -f {_VM_PID_NAME}
+{qemu_block}"""
+    script_path.write_text(script)
+    script_path.chmod(0o755)
+    return script_path
+
+
+def _ssh_to_vm(priv_key: Path, *remote: str, timeout: int = 3) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["ssh", "-q",
+         "-i", str(priv_key),
+         "-p", str(_VM_SSH_PORT),
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         "-o", f"ConnectTimeout={timeout}",
+         "-o", "LogLevel=ERROR",
+         f"{_VM_USER}@127.0.0.1", *remote],
+        capture_output=True, check=False,
+    )
+
+
+def _wait_for_vm_ssh(priv_key: Path, timeout_s: int = 300) -> bool:
+    print(f"  Waiting for VM SSH on port {_VM_SSH_PORT} (up to {timeout_s}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _ssh_to_vm(priv_key, "true").returncode == 0:
+            print("  VM SSH ready.")
+            return True
+        time.sleep(5)
+    return False
+
+
+def _wait_for_firecracker_in_vm(priv_key: Path, timeout_s: int = 900) -> bool:
+    print(f"  Waiting for cloud-init to install firecracker inside the VM "
+          f"(up to {timeout_s}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _ssh_to_vm(priv_key, "test", "-f", "/var/lib/firecracker-ready").returncode == 0:
+            print("  firecracker is installed inside the VM.")
+            return True
+        time.sleep(10)
+    return False
+
+
+def _firecracker_zsh_function(priv_key: Path) -> str:
+    return f"""{_FIRECRACKER_FN_BEGIN}
+firecracker() {{
+    local vm_dir="{_VM_DIR}"
+    if [[ ! -f "$vm_dir/{_VM_QCOW2_NAME}" ]]; then
+        echo "firecracker: Fedora VM not provisioned (expected $vm_dir/{_VM_QCOW2_NAME})." >&2
+        return 1
+    fi
+    if ! "$vm_dir/vm-start.sh"; then
+        echo "firecracker: failed to start backing VM (see $vm_dir/vm.log)." >&2
+        return 1
+    fi
+    local i
+    for i in $(seq 1 60); do
+        ssh -q -i "{priv_key}" -p {_VM_SSH_PORT} \\
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ConnectTimeout=2 -o LogLevel=ERROR \\
+            {_VM_USER}@127.0.0.1 true && break
+        sleep 1
+    done
+    local args=() a
+    for a in "$@"; do args+=("$(printf %q "$a")"); done
+    ssh -t -q -i "{priv_key}" -p {_VM_SSH_PORT} \\
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+        -o LogLevel=ERROR \\
+        {_VM_USER}@127.0.0.1 "sudo /usr/local/bin/firecracker ${{args[*]}}"
+}}
+{_FIRECRACKER_FN_END}
+"""
+
+
+def _install_firecracker_zsh_function(content: str) -> None:
+    zshrc = Path.home() / ".zshrc"
+    existing = zshrc.read_text() if zshrc.exists() else ""
+    pattern = re.compile(
+        re.escape(_FIRECRACKER_FN_BEGIN) + r".*?" + re.escape(_FIRECRACKER_FN_END) + r"\n?",
+        re.DOTALL,
+    )
+    if pattern.search(existing):
+        new = pattern.sub(content, existing)
+    else:
+        new = (existing.rstrip() + "\n\n" if existing else "") + content
+    zshrc.write_text(new)
+    print(f"  Wrote firecracker() function block to {zshrc}")
+
+
+def _macos_major() -> int:
+    """Major version of macOS (e.g. 15 for Sequoia), or 0 if unavailable."""
+    if not IS_MACOS:
+        return 0
+    try:
+        v = platform.mac_ver()[0]
+        return int(v.split(".")[0]) if v else 0
+    except (ValueError, IndexError):
+        return 0
+
+
+def _apple_silicon_generation() -> Optional[int]:
+    """Apple Silicon chip generation (1=M1, 2=M2, 3=M3, ...) or None."""
+    if not IS_MACOS or ARCH != "aarch64":
+        return None
+    try:
+        brand = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+    except OSError:
+        return None
+    m = re.search(r"Apple M(\d+)", brand)
+    return int(m.group(1)) if m else None
+
+
+def _select_vm_backend() -> Optional[str]:
+    """Choose a hypervisor for the firecracker VM.
+
+    Returns "qemu" (Apple Silicon M3+/Sequoia+ with HVF nested virt),
+    "virtualbox" (Intel Mac with nested VT-x), or None to skip with a
+    user-facing notice already printed.
+    """
+    if not IS_MACOS:
+        return None
+    if ARCH == "x86_64":
+        print("\n[firecracker VM] Intel Mac — using VirtualBox "
+              "(supports nested VT-x for in-guest KVM).")
+        return "virtualbox"
+
+    # Apple Silicon
+    gen = _apple_silicon_generation()
+    macos = _macos_major()
+    if gen is not None and gen >= 3 and macos >= 15:
+        print(f"\n[firecracker VM] Apple Silicon M{gen} on macOS {macos} — "
+              f"using QEMU/HVF with nested virtualization (-cpu host,el2=on).")
+        return "qemu"
+
+    chip = f"Apple M{gen}" if gen else "Apple Silicon"
+    os_str = f"macOS {macos}" if macos else "this macOS"
+    print()
+    print(f"[firecracker VM] Skipping firecracker VM provisioning.")
+    print(f"  Detected {chip} on {os_str}. HVF only exposes nested")
+    print(f"  virtualization on M3+ chips running macOS 15 Sequoia or later,")
+    print(f"  and VirtualBox does not support Apple Silicon hosts, so there")
+    print(f"  is no local hypervisor that can run firecracker microVMs here.")
+    print(f"  To use firecracker, provision a Linux cloud VM (e.g. AWS EC2,")
+    print(f"  GCP) and run firecracker there over SSH.")
+    return None
+
+
+def _ensure_virtualbox() -> bool:
+    """Install VirtualBox via brew cask if not present. Returns True if available."""
+    if has_cmd("VBoxManage"):
+        return True
+    print("  Installing VirtualBox via brew cask ...")
+    if run(["brew", "install", "--cask", "virtualbox"], check=False).returncode != 0:
+        err("VirtualBox cask install failed. macOS may require kernel-extension "
+            "approval in System Settings → Privacy & Security; once approved, "
+            "re-run this script.")
+        return False
+    if not has_cmd("VBoxManage"):
+        err("VirtualBox installed but VBoxManage not in PATH. "
+            "macOS may need a reboot or kext approval.")
+        return False
+    return True
+
+
+def _provision_virtualbox_vm(qcow2: Path, seed_iso: Path) -> Optional[Path]:
+    """Create+configure (idempotently) a VirtualBox VM. Returns the start script."""
+    if not _ensure_virtualbox():
+        return None
+
+    vm_name = "firecracker-vm"
+    vbox_base = _VM_DIR / "vbox"
+    vdi = _VM_DIR / "fedora.vdi"
+
+    exists = subprocess.run(
+        ["VBoxManage", "showvminfo", vm_name],
+        capture_output=True, check=False,
+    ).returncode == 0
+
+    if not exists:
+        if not vdi.exists():
+            print(f"  Converting {qcow2.name} → {vdi.name} (VirtualBox VDI) ...")
+            r = run(["VBoxManage", "clonemedium", "disk",
+                     str(qcow2), str(vdi), "--format", "VDI"], check=False)
+            if r.returncode != 0:
+                err("VBoxManage clonemedium failed")
+                return None
+            # Match the 10G size we use on QEMU.
+            run(["VBoxManage", "modifymedium", "disk", str(vdi),
+                 "--resize", "10240"], check=False)
+
+        print(f"  Creating VirtualBox VM '{vm_name}' ...")
+        vbox_base.mkdir(parents=True, exist_ok=True)
+        if run(["VBoxManage", "createvm",
+                "--name", vm_name,
+                "--ostype", "Fedora_64",
+                "--basefolder", str(vbox_base),
+                "--register"], check=False).returncode != 0:
+            err("VBoxManage createvm failed")
+            return None
+
+        # Nested VT-x is the whole point — without it, in-guest KVM (and thus
+        # firecracker) cannot start microVMs.
+        run(["VBoxManage", "modifyvm", vm_name,
+             "--cpus", "2",
+             "--memory", "2048",
+             "--nested-hw-virt", "on",
+             "--nic1", "nat",
+             "--natpf1", f"ssh,tcp,,{_VM_SSH_PORT},,22"], check=False)
+
+        run(["VBoxManage", "storagectl", vm_name,
+             "--name", "SATA", "--add", "sata"], check=False)
+        run(["VBoxManage", "storageattach", vm_name,
+             "--storagectl", "SATA",
+             "--port", "0", "--device", "0", "--type", "hdd",
+             "--medium", str(vdi)], check=False)
+
+        run(["VBoxManage", "storagectl", vm_name,
+             "--name", "IDE", "--add", "ide"], check=False)
+        run(["VBoxManage", "storageattach", vm_name,
+             "--storagectl", "IDE",
+             "--port", "0", "--device", "0", "--type", "dvddrive",
+             "--medium", str(seed_iso)], check=False)
+    else:
+        print(f"  VirtualBox VM '{vm_name}' already registered — reusing.")
+
+    script_path = _VM_DIR / "vm-start.sh"
+    script_path.write_text(f"""#!/usr/bin/env bash
+# Start the VirtualBox-backed Fedora VM that powers the host firecracker() fn.
+# Nested VT-x is on so the Linux guest's KVM (and firecracker) can run microVMs.
+set -euo pipefail
+if VBoxManage list runningvms | grep -q '"{vm_name}"'; then
+    exit 0
+fi
+exec VBoxManage startvm {vm_name} --type headless
+""")
+    script_path.chmod(0o755)
+    return script_path
+
+
+def setup_firecracker_vm() -> None:
+    """Provision a Fedora VM (via QEMU or VirtualBox), install firecracker
+    inside it, and add a firecracker() wrapper to ~/.zshrc. macOS only.
+
+    Backend selection (see _select_vm_backend):
+      * Apple Silicon M3+ / macOS 15+ → QEMU + HVF with nested virt (el2=on)
+      * Intel Mac                     → VirtualBox with nested VT-x
+      * Apple Silicon M1/M2 or older  → skip with cloud-VM notice
+    """
+    if not IS_MACOS:
+        return
+
+    backend = _select_vm_backend()
+    if backend is None:
+        return  # notice already printed
+
+    print("\n=== macOS firecracker VM (Fedora) ===")
+    _VM_DIR.mkdir(parents=True, exist_ok=True)
+
+    priv_key = _VM_DIR / _VM_KEY_NAME
+    pub_key = priv_key.with_suffix(priv_key.suffix + ".pub")
+    if not priv_key.exists():
+        print(f"  Generating SSH keypair at {priv_key} ...")
+        if run(["ssh-keygen", "-t", "ed25519", "-N", "",
+                "-f", str(priv_key), "-q"], check=False).returncode != 0:
+            err("ssh-keygen failed — aborting VM setup")
+            return
+
+    qcow2 = _VM_DIR / _VM_QCOW2_NAME
+    if qcow2.exists():
+        print(f"  Reusing existing Fedora image at {qcow2}")
+    else:
+        print("  Looking up latest Fedora cloud image ...")
+        info = _latest_fedora_cloud_image()
+        if info is None:
+            err("Could not resolve latest Fedora cloud image — aborting VM setup")
+            return
+        filename, qcow2_url, checksum_url = info
+        print(f"  Latest: {filename}")
+        download_dest = _VM_DIR / filename
+        if not _download_fedora_image(qcow2_url, download_dest):
+            err("Fedora image download failed — aborting VM setup")
+            return
+        if not _verify_fedora_qcow2(download_dest, checksum_url):
+            download_dest.unlink(missing_ok=True)
+            return
+        download_dest.rename(qcow2)
+        if has_cmd("qemu-img"):
+            print("  Resizing image to 10G ...")
+            run(["qemu-img", "resize", str(qcow2), "10G"], check=False)
+
+    print("  Building cloud-init seed ISO ...")
+    seed_dir = _VM_DIR / "seed"
+    _write_cloud_init_seed(seed_dir, pub_key.read_text())
+    seed_iso = _VM_DIR / _VM_SEED_ISO_NAME
+    if not _build_seed_iso(seed_dir, seed_iso):
+        err("hdiutil failed to build seed ISO — aborting VM setup")
+        return
+
+    if backend == "qemu":
+        if not has_cmd("qemu-system-aarch64"):
+            err("qemu-system-aarch64 not found — install qemu via brew first.")
+            return
+        print("  Writing QEMU start script ...")
+        start_script = _write_qemu_start_script()
+    else:
+        start_script = _provision_virtualbox_vm(qcow2, seed_iso)
+        if start_script is None:
+            return
+
+    print(f"  Booting VM via {start_script} ...")
+    if run([str(start_script)], check=False).returncode != 0:
+        err(f"VM start failed — see {_VM_DIR / 'vm.log'}")
+        return
+
+    if not _wait_for_vm_ssh(priv_key):
+        err(f"VM SSH never came up — see {_VM_DIR / 'vm.log'}")
+        return
+
+    if not _wait_for_firecracker_in_vm(priv_key):
+        warn("firecracker did not appear in the VM within the timeout; "
+             "cloud-init may still be running. Check `sudo cloud-init status` "
+             "inside the VM (ssh -i ~/.firecracker-vm/id_ed25519 -p 2222 "
+             "fc@127.0.0.1).")
+
+    print("  Installing firecracker() wrapper into ~/.zshrc ...")
+    _install_firecracker_zsh_function(_firecracker_zsh_function(priv_key))
+
+    print(f"  firecracker VM ready (backend: {backend}).")
+    print(f"  Start manually with: {start_script}")
+    if backend == "qemu":
+        print(f"  Nested virt is on (el2=on); the guest's KVM can launch "
+              f"firecracker microVMs.")
+    else:
+        print(f"  Nested VT-x is on; the guest's KVM can launch firecracker microVMs.")
+
 # ── packages module loader ────────────────────────────────────────────────────
 
 def load_packages() -> tuple[list[str], list[str], list[CustomPackage]]:
@@ -1452,14 +2158,30 @@ def main() -> None:
                     help="Skip GUI applications (suitable for headless environments). "
                          "Excludes GUI system packages and skips the entire Flatpak "
                          "section, including installing flatpak itself.")
+    ap.add_argument("--no-vm", action="store_true",
+                    help="macOS only: skip provisioning the Fedora-on-QEMU VM that "
+                         "backs the firecracker() zsh wrapper.")
     args = ap.parse_args()
 
     system_pkgs, flatpak_pkgs, custom_pkgs = load_packages()
 
+    if IS_MACOS:
+        # firecracker is provisioned inside the Fedora VM (see setup_firecracker_vm),
+        # not on the host. Drop it from the host custom-package list.
+        custom_pkgs = [p for p in custom_pkgs if p.name.lower() != "firecracker"]
+
+    print(f"OS:              {OS}")
     print(f"Architecture:    {ARCH}")
     print(f"Package manager: {PKG_MGR}")
     if args.no_gui:
         print("Mode:            headless (--no-gui) — skipping GUI apps and Flatpak")
+
+    if IS_MACOS:
+        # Refuse to run as root before doing anything (brew won't run as root).
+        check_sudo()
+        ensure_xcode_clt()
+        ensure_homebrew()
+
     print("Checking installed packages ...")
 
     if args.no_gui:
@@ -1469,9 +2191,14 @@ def main() -> None:
             print(f"  [NO-GUI] Skipping GUI system packages: {_fmt(skipped_gui)}")
         flatpak_pkgs = []
 
-    # --no-gui suppresses the Flatpak section entirely (both `flatpak` itself
-    # and the Flathub apps), even when --only=flatpak is requested.
-    do_flatpak = args.only in (None, "flatpak") and not args.no_gui
+    # Flatpak is Linux-only — macOS has no Flatpak section regardless of flags.
+    # --no-gui also suppresses the Flatpak section entirely (both `flatpak`
+    # itself and the Flathub apps), even when --only=flatpak is requested.
+    do_flatpak = (
+        args.only in (None, "flatpak")
+        and not args.no_gui
+        and not IS_MACOS
+    )
 
     sys_c  = check_system_packages(system_pkgs)   if args.only in (None, "system")  else {}
     flat_c = check_flatpak_packages(flatpak_pkgs) if do_flatpak                     else {}
@@ -1510,6 +2237,8 @@ def main() -> None:
     if args.only is None:
         check_and_setup_ssh()
         _clone_nvim_config()
+        if IS_MACOS and not args.no_vm:
+            setup_firecracker_vm()
 
     if pyenv_thread is not None:
         if pyenv_thread.is_alive():
