@@ -7,6 +7,10 @@ Sections handled:
   Flatpak Packages — installed via flatpak from Flathub (Linux only;
                      skipped with --no-gui and skipped entirely on macOS)
   Custom Packages  — downloaded, verified, extracted
+  macOS firecracker VM — provisions a Fedora cloud image under QEMU/HVF,
+                     installs firecracker inside it, and adds a
+                     `firecracker()` wrapper to ~/.zshrc that proxies
+                     invocations via SSH. Suppress with --no-vm.
 
 OS detection is automatic. On macOS the first actions are to install the
 Xcode Command Line Tools and Homebrew, which is then used as the system
@@ -14,7 +18,7 @@ package manager.
 
 Usage:
   Linux:  sudo python3 bootstrap_environment.py [--only system|flatpak|custom] [--no-gui]
-  macOS:       python3 bootstrap_environment.py [--only system|custom] [--no-gui]
+  macOS:       python3 bootstrap_environment.py [--only system|custom] [--no-gui] [--no-vm]
                (do NOT use sudo on macOS — Homebrew refuses to run as root)
 """
 
@@ -1418,9 +1422,6 @@ def install_custom_packages(to_install: list[CustomPackage]) -> None:
     print("\n=== Custom Packages ===")
     for pkg in to_install:
         name_lower = pkg.name.lower()
-        if name_lower == "firecracker" and IS_MACOS:
-            warn("firecracker is Linux-only — skipping on macOS")
-            continue
         _, check_path = is_custom_pkg_installed(pkg)
         print(f"\n  Installing {pkg.display_name} ..."
               + (f" (install path: {check_path})" if check_path else ""))
@@ -1616,6 +1617,365 @@ def check_and_setup_ssh() -> None:
         err("gh auth login failed — skipping key upload.")
         return
 
+# ── macOS: Fedora VM + firecracker bridge ────────────────────────────────────
+#
+# Firecracker is Linux-only (needs KVM). On macOS we provision a Fedora cloud
+# VM via QEMU/HVF, install firecracker inside it, and expose a `firecracker`
+# zsh function on the host that proxies invocations over SSH into the VM.
+
+_VM_DIR = Path.home() / ".firecracker-vm"
+_VM_SSH_PORT = 2222
+_VM_USER = "fc"
+_VM_QCOW2_NAME = "fedora.qcow2"
+_VM_SEED_ISO_NAME = "seed.iso"
+_VM_PID_NAME = "vm.pid"
+_VM_KEY_NAME = "id_ed25519"
+_FIRECRACKER_FN_BEGIN = "# >>> firecracker-vm wrapper >>>"
+_FIRECRACKER_FN_END   = "# <<< firecracker-vm wrapper <<<"
+
+
+def _latest_fedora_cloud_image() -> Optional[tuple[str, str, str]]:
+    """Return (filename, qcow2_url, checksum_url) for the latest Fedora cloud qcow2.
+
+    Walks the Fedora mirror directory listing from newest release downward,
+    and returns the first arch-matching qcow2 it finds.
+    """
+    base = "https://dl.fedoraproject.org/pub/fedora/linux/releases/"
+    listing = _fetch_text(base)
+    if not listing:
+        return None
+    versions = sorted(
+        {int(m.group(1)) for m in re.finditer(r'href="(\d+)/?"', listing)},
+        reverse=True,
+    )
+    for ver in versions:
+        images_url = f"{base}{ver}/Cloud/{ARCH}/images/"
+        idx = _fetch_text(images_url)
+        if not idx:
+            continue
+        qcow = re.search(
+            rf'href="(Fedora-Cloud-Base[A-Za-z0-9_-]*-{ver}-[\d.]+\.{ARCH}\.qcow2)"',
+            idx,
+        )
+        ck = re.search(r'href="([^"]*CHECKSUM)"', idx)
+        if not qcow or not ck:
+            continue
+        return qcow.group(1), images_url + qcow.group(1), images_url + ck.group(1)
+    return None
+
+
+def _verify_fedora_qcow2(qcow2: Path, checksum_url: str) -> bool:
+    text = _fetch_text(checksum_url)
+    if not text:
+        return False
+    expected: Optional[str] = None
+    for line in text.splitlines():
+        m = re.match(rf"SHA256 \({re.escape(qcow2.name)}\) = ([0-9a-fA-F]+)", line)
+        if m:
+            expected = m.group(1).lower()
+            break
+    if expected is None:
+        err(f"No SHA256 entry for {qcow2.name} in checksum file")
+        return False
+    print("  Verifying SHA256 (this can take a minute) ...")
+    if _sha256_of(qcow2).lower() != expected:
+        err(f"Fedora image SHA256 mismatch (got {_sha256_of(qcow2)}, expected {expected})")
+        return False
+    print("  SHA256 OK")
+    return True
+
+
+def _download_fedora_image(qcow2_url: str, dest: Path) -> bool:
+    """Stream the Fedora qcow2 via curl (progress bar, resumable)."""
+    if not has_cmd("curl"):
+        return _download(qcow2_url, dest)
+    print(f"  Downloading {dest.name} ...")
+    result = run(["curl", "-L", "--fail", "-#",
+                  "-o", str(dest), qcow2_url], check=False)
+    return result.returncode == 0
+
+
+_FIRECRACKER_USERDATA = """#cloud-config
+hostname: firecracker-vm
+users:
+  - name: {user}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - {pubkey}
+ssh_pwauth: false
+packages:
+  - curl
+  - tar
+  - qemu-kvm
+write_files:
+  - path: /usr/local/sbin/install-firecracker.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      ARCH=$(uname -m)
+      TAG=$(curl -fsSL https://api.github.com/repos/firecracker-microvm/firecracker/releases/latest \\
+            | grep -oE '"tag_name":[[:space:]]*"v[^"]+"' | head -1 \\
+            | sed -E 's/.*"v([^"]+)"/\\1/')
+      cd /tmp
+      curl -fsSL -o fc.tgz \\
+        "https://github.com/firecracker-microvm/firecracker/releases/download/v${{TAG}}/firecracker-v${{TAG}}-${{ARCH}}.tgz"
+      tar -xzf fc.tgz
+      BIN=$(find . -maxdepth 3 -type f -name "firecracker-v${{TAG}}-${{ARCH}}" ! -name '*.debug' | head -1)
+      install -m 0755 "$BIN" /usr/local/bin/firecracker
+      touch /var/lib/firecracker-ready
+runcmd:
+  - /usr/local/sbin/install-firecracker.sh
+"""
+
+
+def _write_cloud_init_seed(seed_dir: Path, pubkey: str) -> None:
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    (seed_dir / "user-data").write_text(
+        _FIRECRACKER_USERDATA.format(user=_VM_USER, pubkey=pubkey.strip())
+    )
+    (seed_dir / "meta-data").write_text(
+        "instance-id: firecracker-vm\nlocal-hostname: firecracker-vm\n"
+    )
+
+
+def _build_seed_iso(seed_dir: Path, iso_path: Path) -> bool:
+    if iso_path.exists():
+        iso_path.unlink()
+    result = run(
+        ["hdiutil", "makehybrid", "-iso", "-joliet",
+         "-default-volume-name", "cidata",
+         "-o", str(iso_path), str(seed_dir)],
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _write_vm_start_script() -> Path:
+    brew_share = Path(_brew_prefix()) / "share" / "qemu"
+    script_path = _VM_DIR / "vm-start.sh"
+
+    if ARCH == "aarch64":
+        edk_code = brew_share / "edk2-aarch64-code.fd"
+        # The brew qemu package ships a generic arm vars template.
+        edk_vars_template = brew_share / "edk2-arm-vars.fd"
+        qemu_block = f"""\
+# Ensure a writable NVRAM file exists (UEFI vars persist here).
+if [[ ! -f edk2-aarch64-vars.fd ]]; then
+    if [[ -f "{edk_vars_template}" ]]; then
+        cp "{edk_vars_template}" edk2-aarch64-vars.fd
+    else
+        truncate -s 64M edk2-aarch64-vars.fd
+    fi
+fi
+
+exec qemu-system-aarch64 \\
+    -machine virt,accel=hvf,highmem=on \\
+    -cpu host \\
+    -smp 2 -m 2048 \\
+    -drive if=pflash,format=raw,readonly=on,file="{edk_code}" \\
+    -drive if=pflash,format=raw,file=edk2-aarch64-vars.fd \\
+    -drive file={_VM_QCOW2_NAME},if=virtio,format=qcow2 \\
+    -drive file={_VM_SEED_ISO_NAME},format=raw,if=virtio,readonly=on \\
+    -display none -serial file:vm.log \\
+    -netdev user,id=net0,hostfwd=tcp::{_VM_SSH_PORT}-:22 \\
+    -device virtio-net-device,netdev=net0 \\
+    -daemonize -pidfile {_VM_PID_NAME}
+"""
+    else:
+        qemu_block = f"""\
+exec qemu-system-x86_64 \\
+    -machine q35,accel=hvf \\
+    -cpu host \\
+    -smp 2 -m 2048 \\
+    -drive file={_VM_QCOW2_NAME},if=virtio,format=qcow2 \\
+    -drive file={_VM_SEED_ISO_NAME},format=raw,if=virtio,readonly=on \\
+    -display none -serial file:vm.log \\
+    -netdev user,id=net0,hostfwd=tcp::{_VM_SSH_PORT}-:22 \\
+    -device virtio-net-device,netdev=net0 \\
+    -daemonize -pidfile {_VM_PID_NAME}
+"""
+
+    script = f"""#!/usr/bin/env bash
+# Start the Fedora-on-QEMU VM that backs the host `firecracker` zsh function.
+set -euo pipefail
+cd "{_VM_DIR}"
+if [[ -f {_VM_PID_NAME} ]] && kill -0 "$(cat {_VM_PID_NAME})" 2>/dev/null; then
+    exit 0
+fi
+rm -f {_VM_PID_NAME}
+{qemu_block}"""
+    script_path.write_text(script)
+    script_path.chmod(0o755)
+    return script_path
+
+
+def _ssh_to_vm(priv_key: Path, *remote: str, timeout: int = 3) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["ssh", "-q",
+         "-i", str(priv_key),
+         "-p", str(_VM_SSH_PORT),
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "UserKnownHostsFile=/dev/null",
+         "-o", f"ConnectTimeout={timeout}",
+         "-o", "LogLevel=ERROR",
+         f"{_VM_USER}@127.0.0.1", *remote],
+        capture_output=True, check=False,
+    )
+
+
+def _wait_for_vm_ssh(priv_key: Path, timeout_s: int = 300) -> bool:
+    print(f"  Waiting for VM SSH on port {_VM_SSH_PORT} (up to {timeout_s}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _ssh_to_vm(priv_key, "true").returncode == 0:
+            print("  VM SSH ready.")
+            return True
+        time.sleep(5)
+    return False
+
+
+def _wait_for_firecracker_in_vm(priv_key: Path, timeout_s: int = 900) -> bool:
+    print(f"  Waiting for cloud-init to install firecracker inside the VM "
+          f"(up to {timeout_s}s) ...")
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _ssh_to_vm(priv_key, "test", "-f", "/var/lib/firecracker-ready").returncode == 0:
+            print("  firecracker is installed inside the VM.")
+            return True
+        time.sleep(10)
+    return False
+
+
+def _firecracker_zsh_function(priv_key: Path) -> str:
+    return f"""{_FIRECRACKER_FN_BEGIN}
+firecracker() {{
+    local vm_dir="{_VM_DIR}"
+    if [[ ! -f "$vm_dir/{_VM_QCOW2_NAME}" ]]; then
+        echo "firecracker: Fedora VM not provisioned (expected $vm_dir/{_VM_QCOW2_NAME})." >&2
+        return 1
+    fi
+    if ! "$vm_dir/vm-start.sh"; then
+        echo "firecracker: failed to start backing VM (see $vm_dir/vm.log)." >&2
+        return 1
+    fi
+    local i
+    for i in $(seq 1 60); do
+        ssh -q -i "{priv_key}" -p {_VM_SSH_PORT} \\
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+            -o ConnectTimeout=2 -o LogLevel=ERROR \\
+            {_VM_USER}@127.0.0.1 true && break
+        sleep 1
+    done
+    local args=() a
+    for a in "$@"; do args+=("$(printf %q "$a")"); done
+    ssh -t -q -i "{priv_key}" -p {_VM_SSH_PORT} \\
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+        -o LogLevel=ERROR \\
+        {_VM_USER}@127.0.0.1 "sudo /usr/local/bin/firecracker ${{args[*]}}"
+}}
+{_FIRECRACKER_FN_END}
+"""
+
+
+def _install_firecracker_zsh_function(content: str) -> None:
+    zshrc = Path.home() / ".zshrc"
+    existing = zshrc.read_text() if zshrc.exists() else ""
+    pattern = re.compile(
+        re.escape(_FIRECRACKER_FN_BEGIN) + r".*?" + re.escape(_FIRECRACKER_FN_END) + r"\n?",
+        re.DOTALL,
+    )
+    if pattern.search(existing):
+        new = pattern.sub(content, existing)
+    else:
+        new = (existing.rstrip() + "\n\n" if existing else "") + content
+    zshrc.write_text(new)
+    print(f"  Wrote firecracker() function block to {zshrc}")
+
+
+def setup_firecracker_vm() -> None:
+    """Provision a Fedora VM via QEMU, install firecracker inside it,
+    and add a firecracker() wrapper to ~/.zshrc. macOS only."""
+    if not IS_MACOS:
+        return
+
+    qemu_bin = "qemu-system-aarch64" if ARCH == "aarch64" else "qemu-system-x86_64"
+    if not has_cmd(qemu_bin):
+        err(f"{qemu_bin} not found — skipping firecracker VM setup. "
+            f"Install qemu via brew first.")
+        return
+
+    print("\n=== macOS firecracker VM (Fedora on QEMU) ===")
+    _VM_DIR.mkdir(parents=True, exist_ok=True)
+
+    priv_key = _VM_DIR / _VM_KEY_NAME
+    pub_key = priv_key.with_suffix(priv_key.suffix + ".pub")
+    if not priv_key.exists():
+        print(f"  Generating SSH keypair at {priv_key} ...")
+        if run(["ssh-keygen", "-t", "ed25519", "-N", "",
+                "-f", str(priv_key), "-q"], check=False).returncode != 0:
+            err("ssh-keygen failed — aborting VM setup")
+            return
+
+    qcow2 = _VM_DIR / _VM_QCOW2_NAME
+    if qcow2.exists():
+        print(f"  Reusing existing Fedora image at {qcow2}")
+    else:
+        print("  Looking up latest Fedora cloud image ...")
+        info = _latest_fedora_cloud_image()
+        if info is None:
+            err("Could not resolve latest Fedora cloud image — aborting VM setup")
+            return
+        filename, qcow2_url, checksum_url = info
+        print(f"  Latest: {filename}")
+        download_dest = _VM_DIR / filename
+        if not _download_fedora_image(qcow2_url, download_dest):
+            err("Fedora image download failed — aborting VM setup")
+            return
+        if not _verify_fedora_qcow2(download_dest, checksum_url):
+            download_dest.unlink(missing_ok=True)
+            return
+        download_dest.rename(qcow2)
+        if has_cmd("qemu-img"):
+            print("  Resizing image to 10G ...")
+            run(["qemu-img", "resize", str(qcow2), "10G"], check=False)
+
+    print("  Building cloud-init seed ISO ...")
+    seed_dir = _VM_DIR / "seed"
+    _write_cloud_init_seed(seed_dir, pub_key.read_text())
+    seed_iso = _VM_DIR / _VM_SEED_ISO_NAME
+    if not _build_seed_iso(seed_dir, seed_iso):
+        err("hdiutil failed to build seed ISO — aborting VM setup")
+        return
+
+    print("  Writing VM start script ...")
+    start_script = _write_vm_start_script()
+
+    print(f"  Booting VM via {start_script} ...")
+    if run([str(start_script)], check=False).returncode != 0:
+        err(f"VM start failed — see {_VM_DIR / 'vm.log'}")
+        return
+
+    if not _wait_for_vm_ssh(priv_key):
+        err(f"VM SSH never came up — see {_VM_DIR / 'vm.log'}")
+        return
+
+    if not _wait_for_firecracker_in_vm(priv_key):
+        warn("firecracker did not appear in the VM within the timeout; "
+             "cloud-init may still be running. Check `sudo cloud-init status` "
+             "inside the VM (ssh -i ~/.firecracker-vm/id_ed25519 -p 2222 "
+             "fc@127.0.0.1).")
+
+    print("  Installing firecracker() wrapper into ~/.zshrc ...")
+    _install_firecracker_zsh_function(_firecracker_zsh_function(priv_key))
+
+    print(f"  firecracker VM ready. Start manually with: {start_script}")
+    print(f"  Note: firecracker microVMs need /dev/kvm in the guest — macOS HVF")
+    print(f"  does not expose nested KVM, so spawning microVMs from inside this")
+    print(f"  Fedora guest will not work. firecracker CLI ops (--version, etc.)")
+    print(f"  and dry-run/api-sock setup will still function.")
+
 # ── packages module loader ────────────────────────────────────────────────────
 
 def load_packages() -> tuple[list[str], list[str], list[CustomPackage]]:
@@ -1636,9 +1996,17 @@ def main() -> None:
                     help="Skip GUI applications (suitable for headless environments). "
                          "Excludes GUI system packages and skips the entire Flatpak "
                          "section, including installing flatpak itself.")
+    ap.add_argument("--no-vm", action="store_true",
+                    help="macOS only: skip provisioning the Fedora-on-QEMU VM that "
+                         "backs the firecracker() zsh wrapper.")
     args = ap.parse_args()
 
     system_pkgs, flatpak_pkgs, custom_pkgs = load_packages()
+
+    if IS_MACOS:
+        # firecracker is provisioned inside the Fedora VM (see setup_firecracker_vm),
+        # not on the host. Drop it from the host custom-package list.
+        custom_pkgs = [p for p in custom_pkgs if p.name.lower() != "firecracker"]
 
     print(f"OS:              {OS}")
     print(f"Architecture:    {ARCH}")
@@ -1707,6 +2075,8 @@ def main() -> None:
     if args.only is None:
         check_and_setup_ssh()
         _clone_nvim_config()
+        if IS_MACOS and not args.no_vm:
+            setup_firecracker_vm()
 
     if pyenv_thread is not None:
         if pyenv_thread.is_alive():
