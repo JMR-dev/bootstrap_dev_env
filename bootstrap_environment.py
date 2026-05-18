@@ -390,6 +390,23 @@ _OVERRIDES: dict[str, dict[str, Optional[list[str]]]] = {
     "apt-get": {
         "ffmpeg-free":     ["ffmpeg"],                    # Fedora-specific name
         "rg":              ["ripgrep"],
+        # Python build deps — Fedora/RHEL naming differs from Debian/Ubuntu
+        "bzip2-devel":     ["libbz2-dev"],
+        "gdbm-libs":       ["libgdbm-dev"],
+        "libffi-devel":    ["libffi-dev"],
+        "libuuid-devel":   ["uuid-dev"],
+        "libxml2-devel":   ["libxml2-dev"],
+        "libzstd-devel":   ["libzstd-dev"],
+        "ncurses-devel":   ["libncursesw5-dev"],
+        "openssl-devel":   ["libssl-dev"],
+        "readline-devel":  ["libreadline-dev"],
+        "sqlite":          ["sqlite3"],
+        "sqlite-devel":    ["libsqlite3-dev"],
+        "tk-devel":        ["tk-dev"],
+        "xmlsec1-devel":   ["libxmlsec1-dev"],
+        "xz":              ["xz-utils"],
+        "xz-devel":        ["liblzma-dev"],
+        "zlib-devel":      ["zlib1g-dev"],
     },
     "brew": {
         # Provided by Xcode CLT or the OS — no-op on macOS.
@@ -422,15 +439,20 @@ _OVERRIDES: dict[str, dict[str, Optional[list[str]]]] = {
         "webcamoid":                 None,
         # Python build deps — macOS SDK / brew formulas already bundle headers.
         "bzip2-devel":               None,
+        "curl":                      None,   # built-in on macOS
         "gdbm-libs":                 ["gdbm"],
         "libffi-devel":              ["libffi"],
         "libnsl2":                   None,
         "libuuid-devel":             None,
+        "libxml2-devel":             ["libxml2"],
         "libzstd-devel":             ["zstd"],
+        "ncurses-devel":             None,   # provided by macOS SDK
         "openssl-devel":             ["openssl@3"],
         "readline-devel":            ["readline"],
         "sqlite-devel":              None,
         "tk-devel":                  ["tcl-tk"],
+        "xmlsec1-devel":             ["libxmlsec1"],
+        "xz":                        ["xz"],
         "xz-devel":                  None,
         "zlib-devel":                None,
     },
