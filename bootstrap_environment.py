@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Bootstrap packages listed in formatted_packages.txt.
+Bootstrap packages declared in formatted_packages.py.
 
 Sections handled:
-  === System Packages ===            — installed via dnf or apt-get
-  === Flatpak Packages ===           — installed via flatpak from Flathub
-  === Custom Installed Packages ===  — downloaded, verified, extracted
+  System Packages  — installed via dnf or apt-get
+  Flatpak Packages — installed via flatpak from Flathub (skipped with --no-gui)
+  Custom Packages  — downloaded, verified, extracted
 
 Usage:
   sudo python3 bootstrap_environment.py [--only system|flatpak|custom] [--no-gui]
@@ -32,8 +32,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import formatted_packages
+
 SCRIPT_DIR = Path(__file__).parent
-PACKAGES_FILE = SCRIPT_DIR / "formatted_packages.txt"
 RUN_LOG = SCRIPT_DIR / "bootstrap_run.log"
 
 # ── issue log ─────────────────────────────────────────────────────────────────
@@ -118,6 +119,11 @@ ARCH = detect_arch()
 _ARCH_GO       = {"x86_64": "amd64",  "aarch64": "arm64"}
 _ARCH_MINIKUBE = {"x86_64": "amd64",  "aarch64": "arm64"}
 _ARCH_DEB      = {"x86_64": "amd64",  "aarch64": "arm64"}
+_ARCH_NVIM     = {"x86_64": "x86_64", "aarch64": "arm64"}
+
+def _url_format(template: str, version: Optional[str]) -> str:
+    """Interpolate {version}, {arch}, {arch_go} into a URL template."""
+    return template.format(version=version or "", arch=ARCH, arch_go=_ARCH_GO[ARCH])
 
 def _arch_matches(name: str, arch: str = ARCH) -> bool:
     n = name.lower()
@@ -172,6 +178,14 @@ def _fetch_json(url: str) -> Optional[dict]:
             return json.load(resp)
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
         err(f"API request failed for {url}: {e}")
+        return None
+
+def _fetch_text(url: str) -> Optional[str]:
+    try:
+        with urllib.request.urlopen(url) as resp:
+            return resp.read().decode().strip()
+    except (urllib.error.URLError, OSError) as e:
+        err(f"Fetch failed for {url}: {e}")
         return None
 
 # ── installation checks ───────────────────────────────────────────────────────
@@ -625,28 +639,41 @@ def install_flatpak_packages(to_install: list[str]) -> None:
 @dataclass
 class CustomPackage:
     name: str
-    url: Optional[str] = None           # archive download URL (not required for all install methods)
-    sha256: Optional[str] = None        # hex digest to compare against
-    sha256_url: Optional[str] = None    # URL to a minisig file
-    minisign_key: Optional[str] = None  # base64 public key for minisign verification
-    install_path: Optional[str] = None  # override the default install-check path
+    version: Optional[str] = None              # pinned fallback version
+    url_template: Optional[str] = None         # uses {version}, {arch}, {arch_go}
+    sha256: Optional[str] = None               # hex digest of the pinned archive
+    sha256_url_template: Optional[str] = None  # template for a .minisig URL
+    minisign_key: Optional[str] = None         # base64 public key for minisign verification
+    fetch_latest: Optional[str] = None         # latest-version resolver hint
+    install_path: Optional[str] = None         # override the default install-check path
 
+    @property
+    def url(self) -> Optional[str]:
+        return _url_format(self.url_template, self.version) if self.url_template else None
+
+    @property
+    def sha256_url(self) -> Optional[str]:
+        return (
+            _url_format(self.sha256_url_template, self.version)
+            if self.sha256_url_template else None
+        )
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.name}-{self.version}" if self.version else self.name
+
+
+_DEFAULT_INSTALL_PATHS: dict[str, Path] = {
+    "go":          Path("/usr/local/go"),
+    "firecracker": Path("/usr/local/bin/firecracker"),
+    "zig":         Path("/usr/local/bin/zig"),
+    "nvm":         Path("~/.nvm"),
+    "pyenv":       Path("~/.pyenv"),
+    "neovim":      Path(f"/opt/nvim-linux-{_ARCH_NVIM[ARCH]}"),
+}
 
 def _default_install_path(pkg: CustomPackage) -> Optional[Path]:
-    n = pkg.name.lower()
-    if n.startswith("go-"):
-        return Path("/usr/local/go")
-    if "firecracker" in n:
-        return Path("/usr/local/bin/firecracker")
-    if "zig" in n:
-        return Path("/usr/local/bin/zig")
-    if n == "nvm":
-        return Path("~/.nvm")
-    if n == "pyenv":
-        return Path("~/.pyenv")
-    if n == "neovim":
-        return Path("/opt/nvim-linux-x86_64")
-    return None
+    return _DEFAULT_INSTALL_PATHS.get(pkg.name.lower())
 
 
 def is_custom_pkg_installed(pkg: CustomPackage) -> tuple[bool, Optional[Path]]:
@@ -741,8 +768,7 @@ def _install_firecracker(archive: Path, tmp: Path) -> None:
 
 def _install_zig(pkg: CustomPackage, archive: Path, tmp: Path) -> None:
     parent = Path("/usr/local")
-    version = pkg.name.split("-", 1)[1]   # "zig-0.16.0" → "0.16.0"
-    zig_dir = parent / f"zig-{version}"
+    zig_dir = parent / f"zig-{pkg.version}"
     if zig_dir.exists():
         run(["rm", "-rf", str(zig_dir)], as_sudo=True)
     run(["tar", "-C", str(parent), "-xJf", str(archive)], as_sudo=True)
@@ -780,7 +806,8 @@ def _install_neovim(pkg: CustomPackage, tmp: Path) -> None:
     if data is None:
         return
 
-    asset_name = "nvim-linux-x86_64.tar.gz"
+    arch_token = _ARCH_NVIM[ARCH]
+    asset_name = f"nvim-linux-{arch_token}.tar.gz"
     asset = next((a for a in data["assets"] if a["name"] == asset_name), None)
     if asset is None:
         err(f"Neovim asset {asset_name} not found")
@@ -802,17 +829,18 @@ def _install_neovim(pkg: CustomPackage, tmp: Path) -> None:
         return
     print("  SHA256 OK")
 
-    print("  Extracting Neovim to /opt ...")
-    run(["rm", "-rf", "/opt/nvim-linux-x86_64"], as_sudo=True)
+    install_dir = f"/opt/nvim-linux-{arch_token}"
+    print(f"  Extracting Neovim to /opt ...")
+    run(["rm", "-rf", install_dir], as_sudo=True)
     run(["tar", "-C", "/opt", "-xzf", str(dest)], as_sudo=True)
 
-    profile_line = 'export PATH="$PATH:/opt/nvim-linux-x86_64/bin"'
+    profile_line = f'export PATH="$PATH:{install_dir}/bin"'
     profile_script = "/etc/profile.d/neovim.sh"
     run(["bash", "-c",
          f"grep -qxF {profile_line!r} {profile_script} 2>/dev/null || "
          f"echo {profile_line!r} >> {profile_script}"],
         as_sudo=True, check=False)
-    print(f"  Neovim installed to /opt/nvim-linux-x86_64")
+    print(f"  Neovim installed to {install_dir}")
 
 
 def _clone_nvim_config() -> None:
@@ -962,11 +990,106 @@ def ensure_python_latest() -> Optional[threading.Thread]:
     return t
 
 
+def _resolve_latest_go(pkg: CustomPackage) -> Optional[tuple[str, str]]:
+    releases = _fetch_json("https://go.dev/dl/?mode=json")
+    if not releases:
+        return None
+    latest = releases[0] if isinstance(releases, list) else releases
+    raw_version = latest.get("version", "")
+    version = raw_version[2:] if raw_version.startswith("go") else raw_version
+    if not version:
+        return None
+    archive_name = f"go{version}.linux-{_ARCH_GO[ARCH]}.tar.gz"
+    entry = next(
+        (f for f in latest.get("files", [])
+         if f.get("filename") == archive_name and f.get("kind") == "archive"),
+        None,
+    )
+    if not entry or not entry.get("sha256"):
+        return None
+    return version, entry["sha256"]
+
+
+def _resolve_latest_firecracker(pkg: CustomPackage) -> Optional[tuple[str, str]]:
+    data = _fetch_json(
+        "https://api.github.com/repos/firecracker-microvm/firecracker/releases/latest"
+    )
+    if not data:
+        return None
+    version = data.get("tag_name", "").lstrip("v")
+    if not version:
+        return None
+    archive_name = f"firecracker-v{version}-{ARCH}.tgz"
+    sha_asset = next(
+        (a for a in data.get("assets", []) if a["name"] == f"{archive_name}.sha256.txt"),
+        None,
+    )
+    if not sha_asset:
+        return None
+    sha = _fetch_text(sha_asset["browser_download_url"])
+    if not sha:
+        return None
+    return version, sha.split()[0]
+
+
+def _resolve_latest_zig(_pkg: CustomPackage) -> Optional[tuple[str, str]]:
+    data = _fetch_json("https://ziglang.org/download/index.json")
+    if not data:
+        return None
+    stable = [v for v in data.keys() if v != "master" and re.match(r"^\d+\.\d+\.\d+$", v)]
+    if not stable:
+        return None
+    stable.sort(key=lambda v: tuple(int(x) for x in v.split(".")))
+    version = stable[-1]
+    entry = data[version].get(f"{ARCH}-linux")
+    if not entry or "shasum" not in entry:
+        return None
+    return version, entry["shasum"]
+
+
+_LATEST_RESOLVERS = {
+    "go":          _resolve_latest_go,
+    "firecracker": _resolve_latest_firecracker,
+    "zig":         _resolve_latest_zig,
+}
+
+
+def _resolve_latest(pkg: CustomPackage) -> None:
+    """Best-effort upgrade pkg.version/sha256 to the latest release.
+
+    On any failure, logs a warning and leaves the pinned values in place.
+    Clears sha256_url_template when sha256 is overridden so the dynamic
+    digest is what gets verified.
+    """
+    resolver = _LATEST_RESOLVERS.get(pkg.fetch_latest or "")
+    if resolver is None:
+        return
+    print(f"  Checking latest version for {pkg.name} ...")
+    try:
+        result = resolver(pkg)
+    except Exception as e:  # noqa: BLE001 — best-effort lookup, any failure is logged
+        warn(f"{pkg.name}: latest-version lookup raised {e!r}; "
+             f"falling back to pinned version {pkg.version}")
+        return
+    if result is None:
+        warn(f"{pkg.name}: could not resolve latest version; "
+             f"falling back to pinned version {pkg.version}")
+        return
+    latest_version, latest_sha = result
+    if latest_version == pkg.version:
+        print(f"  Pinned version {pkg.version} is already the latest.")
+        return
+    print(f"  Latest is {latest_version} (pinned was {pkg.version}); using latest.")
+    pkg.version = latest_version
+    pkg.sha256 = latest_sha
+    pkg.sha256_url_template = None  # prefer the freshly resolved sha256
+
+
 def install_custom_packages(to_install: list[CustomPackage]) -> None:
     print("\n=== Custom Packages ===")
     for pkg in to_install:
         _, check_path = is_custom_pkg_installed(pkg)
-        print(f"\n  Installing {pkg.name} ..."
+        print(f"\n  Installing {pkg.display_name} ..."
               + (f" (install path: {check_path})" if check_path else ""))
         if check_path is None:
             warn(f"{pkg.name}: no known install path — script will not detect future installs")
@@ -985,6 +1108,8 @@ def install_custom_packages(to_install: list[CustomPackage]) -> None:
                 _install_neovim(pkg, Path(tmp_str))
             continue
 
+        _resolve_latest(pkg)
+
         if not pkg.url:
             warn(f"No URL or install handler for '{pkg.name}' — skipping")
             continue
@@ -999,11 +1124,11 @@ def install_custom_packages(to_install: list[CustomPackage]) -> None:
                 continue
             if not _verify(archive, pkg):
                 continue
-            if name_lower.startswith("go-"):
+            if name_lower == "go":
                 _install_go(archive)
-            elif "firecracker" in name_lower:
+            elif name_lower == "firecracker":
                 _install_firecracker(archive, tmp)
-            elif "zig" in name_lower:
+            elif name_lower == "zig":
                 _install_zig(pkg, archive, tmp)
             else:
                 warn(f"No install handler for '{pkg.name}' — skipping")
@@ -1096,10 +1221,10 @@ def print_check_summary(sys_c: dict, flat_c: dict, cust_c: dict, only: Optional[
         ok = cust_c["already_installed"]
         print("\nCustom packages:")
         for pkg, path in ok:
-            print(f"  [OK]      {pkg.name}  ({path})")
+            print(f"  [OK]      {pkg.display_name}  ({path})")
         for pkg in to:
             _, path = is_custom_pkg_installed(pkg)
-            print(f"  [INSTALL] {pkg.name}" + (f"  → {path}" if path else ""))
+            print(f"  [INSTALL] {pkg.display_name}" + (f"  → {path}" if path else ""))
         total += len(to)
 
     return total
@@ -1154,79 +1279,29 @@ def check_and_setup_ssh() -> None:
         err("gh auth login failed — skipping key upload.")
         return
 
-# ── file parser ───────────────────────────────────────────────────────────────
+# ── packages module loader ────────────────────────────────────────────────────
 
-def parse_packages_file(path: Path) -> tuple[list[str], list[str], list[CustomPackage]]:
-    system_pkgs: list[str] = []
-    flatpak_pkgs: list[str] = []
-    custom_pkgs: list[CustomPackage] = []
-    current: dict = {}
-    section: Optional[str] = None
-
-    def flush_custom():
-        if "name" in current:
-            custom_pkgs.append(CustomPackage(**current))
-        current.clear()
-
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if line == "=== System Packages ===":
-            section = "system"
-        elif line == "=== Flatpak Packages ===":
-            flush_custom()
-            section = "flatpak"
-        elif line == "=== Custom Installed Packages ===":
-            flush_custom()
-            section = "custom"
-        elif not line:
-            if section == "custom":
-                flush_custom()
-        elif line.startswith("==="):
-            pass
-        elif section == "system":
-            system_pkgs.append(line)
-        elif section == "flatpak":
-            flatpak_pkgs.append(line)
-        elif section == "custom" and " - " in line:
-            key, _, val = line.partition(" - ")
-            key = key.strip().lower().replace(" ", "_")
-            val = val.strip()
-            if key == "name":
-                current["name"] = val
-            elif key == "url":
-                current["url"] = val
-            elif key == "sha256":
-                current["sha256"] = val
-            elif key == "sha256_url_tar":
-                current["sha256_url"] = val
-            elif key == "minisign_key":
-                current["minisign_key"] = val
-            elif key == "install_path":
-                current["install_path"] = val
-
-    flush_custom()
+def load_packages() -> tuple[list[str], list[str], list[CustomPackage]]:
+    system_pkgs  = list(formatted_packages.SYSTEM_PACKAGES)
+    flatpak_pkgs = list(formatted_packages.FLATPAK_PACKAGES)
+    custom_pkgs  = [CustomPackage(**spec) for spec in formatted_packages.CUSTOM_PACKAGES]
     return system_pkgs, flatpak_pkgs, custom_pkgs
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Bootstrap packages from formatted_packages.txt"
+        description="Bootstrap packages declared in formatted_packages.py"
     )
     ap.add_argument("--only", choices=["system", "flatpak", "custom"],
                     help="Install only the named section")
     ap.add_argument("--no-gui", action="store_true",
                     help="Skip GUI applications (suitable for headless environments). "
-                         "Excludes GUI system packages and the entire Flatpak section.")
-    ap.add_argument("--file", default=str(PACKAGES_FILE), metavar="PATH",
-                    help="Path to packages file (default: formatted_packages.txt next to this script)")
+                         "Excludes GUI system packages and skips the entire Flatpak "
+                         "section, including installing flatpak itself.")
     args = ap.parse_args()
 
-    pkg_file = Path(args.file)
-    if not pkg_file.exists():
-        sys.exit(f"Packages file not found: {pkg_file}")
-
-    system_pkgs, flatpak_pkgs, custom_pkgs = parse_packages_file(pkg_file)
+    system_pkgs, flatpak_pkgs, custom_pkgs = load_packages()
 
     print(f"Architecture:    {ARCH}")
     print(f"Package manager: {PKG_MGR}")
@@ -1241,6 +1316,8 @@ def main() -> None:
             print(f"  [NO-GUI] Skipping GUI system packages: {_fmt(skipped_gui)}")
         flatpak_pkgs = []
 
+    # --no-gui suppresses the Flatpak section entirely (both `flatpak` itself
+    # and the Flathub apps), even when --only=flatpak is requested.
     do_flatpak = args.only in (None, "flatpak") and not args.no_gui
 
     sys_c  = check_system_packages(system_pkgs)   if args.only in (None, "system")  else {}
