@@ -93,10 +93,16 @@ def run(
     if as_sudo and os.geteuid() != 0:
         cmd = ["sudo"] + cmd
     print(f"  $ {' '.join(str(c) for c in cmd)}")
-    return subprocess.run(
-        cmd, check=check, input=input,
-        capture_output=capture_output, cwd=cwd,
-    )
+    try:
+        return subprocess.run(
+            cmd, check=check, input=input,
+            capture_output=capture_output, cwd=cwd,
+        )
+    except OSError as exc:
+        if check:
+            raise
+        warn(f"OSError launching {cmd[0]!r}: {exc}")
+        return subprocess.CompletedProcess(cmd, returncode=1)
 
 def shell(
     cmd: str,
@@ -106,10 +112,16 @@ def shell(
     text: bool = False,
 ) -> subprocess.CompletedProcess:
     print(f"  $ {cmd}")
-    return subprocess.run(
-        cmd, shell=True, check=check,
-        capture_output=capture_output, text=text,
-    )
+    try:
+        return subprocess.run(
+            cmd, shell=True, check=check,
+            capture_output=capture_output, text=text,
+        )
+    except OSError as exc:
+        if check:
+            raise
+        warn(f"OSError in shell command: {exc}")
+        return subprocess.CompletedProcess(cmd, returncode=1)
 
 def has_cmd(name: str) -> bool:
     return shutil.which(name) is not None
