@@ -266,6 +266,18 @@ def detect_pkg_mgr() -> str:
 PKG_MGR = detect_pkg_mgr()
 
 
+def _os_release_field(field: str) -> str:
+    """Return the value of a field from /etc/os-release (unquoted), or ''."""
+    try:
+        data = Path("/etc/os-release").read_text()
+    except OSError:
+        return ""
+    for line in data.splitlines():
+        if line.startswith(field + "="):
+            _, _, val = line.partition("=")
+            return val.strip().strip('"')
+    return ""
+
 def _is_rhel_family() -> bool:
     """True for RHEL-derived distros (Fedora, RHEL, CentOS, Rocky, Alma, ...)."""
     try:
@@ -467,10 +479,13 @@ def setup_docker_repo() -> None:
     elif PKG_MGR == "apt-get":
         if _repo_file_exists("/etc/apt/sources.list.d/docker.list"):
             return
+        run(["apt-get", "update"], as_sudo=True)
         run(["apt-get", "install", "-y", "ca-certificates", "curl", "gnupg"], as_sudo=True)
+        distro_id = _os_release_field("ID")
+        docker_distro = distro_id if distro_id in {"debian", "ubuntu"} else "ubuntu"
         shell(
             "install -m 0755 -d /etc/apt/keyrings && "
-            "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | "
+            f"curl -fsSL https://download.docker.com/linux/{docker_distro}/gpg | "
             "sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg && "
             "sudo chmod a+r /etc/apt/keyrings/docker.gpg"
         )
@@ -484,7 +499,7 @@ def setup_docker_repo() -> None:
             as_sudo=True,
             input=(
                 f"deb [arch={deb_arch} signed-by=/etc/apt/keyrings/docker.gpg] "
-                f"https://download.docker.com/linux/ubuntu {codename} stable\n"
+                f"https://download.docker.com/linux/{docker_distro} {codename} stable\n"
             ).encode(),
             capture_output=True, check=True,
         )
