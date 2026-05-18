@@ -7,10 +7,16 @@ Sections handled:
   Flatpak Packages — installed via flatpak from Flathub (Linux only;
                      skipped with --no-gui and skipped entirely on macOS)
   Custom Packages  — downloaded, verified, extracted
-  macOS firecracker VM — provisions a Fedora cloud image under QEMU/HVF,
+  macOS firecracker VM — provisions a Fedora cloud image under a
+                     hypervisor that supports nested virtualization,
                      installs firecracker inside it, and adds a
                      `firecracker()` wrapper to ~/.zshrc that proxies
-                     invocations via SSH. Suppress with --no-vm.
+                     invocations via SSH. Backend is picked automatically:
+                       • Apple Silicon M3+ / macOS 15+: QEMU/HVF (el2=on)
+                       • Intel Mac:                    VirtualBox (nested VT-x)
+                       • Apple Silicon M1/M2:          skipped (no local
+                                                       nested-virt option)
+                     Suppress with --no-vm.
 
 OS detection is automatic. On macOS the first actions are to install the
 Xcode Command Line Tools and Homebrew, which is then used as the system
@@ -1752,15 +1758,16 @@ def _build_seed_iso(seed_dir: Path, iso_path: Path) -> bool:
     return result.returncode == 0
 
 
-def _write_vm_start_script() -> Path:
+def _write_qemu_start_script() -> Path:
+    """Write the QEMU launcher. Used only on Apple Silicon M3+ / macOS 15+,
+    where HVF exposes nested virtualization via `-cpu host,el2=on`."""
     brew_share = Path(_brew_prefix()) / "share" / "qemu"
     script_path = _VM_DIR / "vm-start.sh"
 
-    if ARCH == "aarch64":
-        edk_code = brew_share / "edk2-aarch64-code.fd"
-        # The brew qemu package ships a generic arm vars template.
-        edk_vars_template = brew_share / "edk2-arm-vars.fd"
-        qemu_block = f"""\
+    edk_code = brew_share / "edk2-aarch64-code.fd"
+    # The brew qemu package ships a generic arm vars template.
+    edk_vars_template = brew_share / "edk2-arm-vars.fd"
+    qemu_block = f"""\
 # Ensure a writable NVRAM file exists (UEFI vars persist here).
 if [[ ! -f edk2-aarch64-vars.fd ]]; then
     if [[ -f "{edk_vars_template}" ]]; then
@@ -1772,7 +1779,7 @@ fi
 
 exec qemu-system-aarch64 \\
     -machine virt,accel=hvf,highmem=on \\
-    -cpu host \\
+    -cpu host,el2=on \\
     -smp 2 -m 2048 \\
     -drive if=pflash,format=raw,readonly=on,file="{edk_code}" \\
     -drive if=pflash,format=raw,file=edk2-aarch64-vars.fd \\
@@ -1783,22 +1790,10 @@ exec qemu-system-aarch64 \\
     -device virtio-net-device,netdev=net0 \\
     -daemonize -pidfile {_VM_PID_NAME}
 """
-    else:
-        qemu_block = f"""\
-exec qemu-system-x86_64 \\
-    -machine q35,accel=hvf \\
-    -cpu host \\
-    -smp 2 -m 2048 \\
-    -drive file={_VM_QCOW2_NAME},if=virtio,format=qcow2 \\
-    -drive file={_VM_SEED_ISO_NAME},format=raw,if=virtio,readonly=on \\
-    -display none -serial file:vm.log \\
-    -netdev user,id=net0,hostfwd=tcp::{_VM_SSH_PORT}-:22 \\
-    -device virtio-net-device,netdev=net0 \\
-    -daemonize -pidfile {_VM_PID_NAME}
-"""
 
     script = f"""#!/usr/bin/env bash
 # Start the Fedora-on-QEMU VM that backs the host `firecracker` zsh function.
+# Nested virt enabled via el2=on (requires Apple M3+ on macOS 15 Sequoia+).
 set -euo pipefail
 cd "{_VM_DIR}"
 if [[ -f {_VM_PID_NAME} ]] && kill -0 "$(cat {_VM_PID_NAME})" 2>/dev/null; then
@@ -1894,19 +1889,176 @@ def _install_firecracker_zsh_function(content: str) -> None:
     print(f"  Wrote firecracker() function block to {zshrc}")
 
 
+def _macos_major() -> int:
+    """Major version of macOS (e.g. 15 for Sequoia), or 0 if unavailable."""
+    if not IS_MACOS:
+        return 0
+    try:
+        v = platform.mac_ver()[0]
+        return int(v.split(".")[0]) if v else 0
+    except (ValueError, IndexError):
+        return 0
+
+
+def _apple_silicon_generation() -> Optional[int]:
+    """Apple Silicon chip generation (1=M1, 2=M2, 3=M3, ...) or None."""
+    if not IS_MACOS or ARCH != "aarch64":
+        return None
+    try:
+        brand = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+    except OSError:
+        return None
+    m = re.search(r"Apple M(\d+)", brand)
+    return int(m.group(1)) if m else None
+
+
+def _select_vm_backend() -> Optional[str]:
+    """Choose a hypervisor for the firecracker VM.
+
+    Returns "qemu" (Apple Silicon M3+/Sequoia+ with HVF nested virt),
+    "virtualbox" (Intel Mac with nested VT-x), or None to skip with a
+    user-facing notice already printed.
+    """
+    if not IS_MACOS:
+        return None
+    if ARCH == "x86_64":
+        print("\n[firecracker VM] Intel Mac — using VirtualBox "
+              "(supports nested VT-x for in-guest KVM).")
+        return "virtualbox"
+
+    # Apple Silicon
+    gen = _apple_silicon_generation()
+    macos = _macos_major()
+    if gen is not None and gen >= 3 and macos >= 15:
+        print(f"\n[firecracker VM] Apple Silicon M{gen} on macOS {macos} — "
+              f"using QEMU/HVF with nested virtualization (-cpu host,el2=on).")
+        return "qemu"
+
+    chip = f"Apple M{gen}" if gen else "Apple Silicon"
+    os_str = f"macOS {macos}" if macos else "this macOS"
+    print()
+    print(f"[firecracker VM] Skipping firecracker VM provisioning.")
+    print(f"  Detected {chip} on {os_str}. HVF only exposes nested")
+    print(f"  virtualization on M3+ chips running macOS 15 Sequoia or later,")
+    print(f"  and VirtualBox does not support Apple Silicon hosts, so there")
+    print(f"  is no local hypervisor that can run firecracker microVMs here.")
+    print(f"  To use firecracker, provision a Linux cloud VM (e.g. AWS EC2,")
+    print(f"  GCP) and run firecracker there over SSH.")
+    return None
+
+
+def _ensure_virtualbox() -> bool:
+    """Install VirtualBox via brew cask if not present. Returns True if available."""
+    if has_cmd("VBoxManage"):
+        return True
+    print("  Installing VirtualBox via brew cask ...")
+    if run(["brew", "install", "--cask", "virtualbox"], check=False).returncode != 0:
+        err("VirtualBox cask install failed. macOS may require kernel-extension "
+            "approval in System Settings → Privacy & Security; once approved, "
+            "re-run this script.")
+        return False
+    if not has_cmd("VBoxManage"):
+        err("VirtualBox installed but VBoxManage not in PATH. "
+            "macOS may need a reboot or kext approval.")
+        return False
+    return True
+
+
+def _provision_virtualbox_vm(qcow2: Path, seed_iso: Path) -> Optional[Path]:
+    """Create+configure (idempotently) a VirtualBox VM. Returns the start script."""
+    if not _ensure_virtualbox():
+        return None
+
+    vm_name = "firecracker-vm"
+    vbox_base = _VM_DIR / "vbox"
+    vdi = _VM_DIR / "fedora.vdi"
+
+    exists = subprocess.run(
+        ["VBoxManage", "showvminfo", vm_name],
+        capture_output=True, check=False,
+    ).returncode == 0
+
+    if not exists:
+        if not vdi.exists():
+            print(f"  Converting {qcow2.name} → {vdi.name} (VirtualBox VDI) ...")
+            r = run(["VBoxManage", "clonemedium", "disk",
+                     str(qcow2), str(vdi), "--format", "VDI"], check=False)
+            if r.returncode != 0:
+                err("VBoxManage clonemedium failed")
+                return None
+            # Match the 10G size we use on QEMU.
+            run(["VBoxManage", "modifymedium", "disk", str(vdi),
+                 "--resize", "10240"], check=False)
+
+        print(f"  Creating VirtualBox VM '{vm_name}' ...")
+        vbox_base.mkdir(parents=True, exist_ok=True)
+        if run(["VBoxManage", "createvm",
+                "--name", vm_name,
+                "--ostype", "Fedora_64",
+                "--basefolder", str(vbox_base),
+                "--register"], check=False).returncode != 0:
+            err("VBoxManage createvm failed")
+            return None
+
+        # Nested VT-x is the whole point — without it, in-guest KVM (and thus
+        # firecracker) cannot start microVMs.
+        run(["VBoxManage", "modifyvm", vm_name,
+             "--cpus", "2",
+             "--memory", "2048",
+             "--nested-hw-virt", "on",
+             "--nic1", "nat",
+             "--natpf1", f"ssh,tcp,,{_VM_SSH_PORT},,22"], check=False)
+
+        run(["VBoxManage", "storagectl", vm_name,
+             "--name", "SATA", "--add", "sata"], check=False)
+        run(["VBoxManage", "storageattach", vm_name,
+             "--storagectl", "SATA",
+             "--port", "0", "--device", "0", "--type", "hdd",
+             "--medium", str(vdi)], check=False)
+
+        run(["VBoxManage", "storagectl", vm_name,
+             "--name", "IDE", "--add", "ide"], check=False)
+        run(["VBoxManage", "storageattach", vm_name,
+             "--storagectl", "IDE",
+             "--port", "0", "--device", "0", "--type", "dvddrive",
+             "--medium", str(seed_iso)], check=False)
+    else:
+        print(f"  VirtualBox VM '{vm_name}' already registered — reusing.")
+
+    script_path = _VM_DIR / "vm-start.sh"
+    script_path.write_text(f"""#!/usr/bin/env bash
+# Start the VirtualBox-backed Fedora VM that powers the host firecracker() fn.
+# Nested VT-x is on so the Linux guest's KVM (and firecracker) can run microVMs.
+set -euo pipefail
+if VBoxManage list runningvms | grep -q '"{vm_name}"'; then
+    exit 0
+fi
+exec VBoxManage startvm {vm_name} --type headless
+""")
+    script_path.chmod(0o755)
+    return script_path
+
+
 def setup_firecracker_vm() -> None:
-    """Provision a Fedora VM via QEMU, install firecracker inside it,
-    and add a firecracker() wrapper to ~/.zshrc. macOS only."""
+    """Provision a Fedora VM (via QEMU or VirtualBox), install firecracker
+    inside it, and add a firecracker() wrapper to ~/.zshrc. macOS only.
+
+    Backend selection (see _select_vm_backend):
+      * Apple Silicon M3+ / macOS 15+ → QEMU + HVF with nested virt (el2=on)
+      * Intel Mac                     → VirtualBox with nested VT-x
+      * Apple Silicon M1/M2 or older  → skip with cloud-VM notice
+    """
     if not IS_MACOS:
         return
 
-    qemu_bin = "qemu-system-aarch64" if ARCH == "aarch64" else "qemu-system-x86_64"
-    if not has_cmd(qemu_bin):
-        err(f"{qemu_bin} not found — skipping firecracker VM setup. "
-            f"Install qemu via brew first.")
-        return
+    backend = _select_vm_backend()
+    if backend is None:
+        return  # notice already printed
 
-    print("\n=== macOS firecracker VM (Fedora on QEMU) ===")
+    print("\n=== macOS firecracker VM (Fedora) ===")
     _VM_DIR.mkdir(parents=True, exist_ok=True)
 
     priv_key = _VM_DIR / _VM_KEY_NAME
@@ -1949,8 +2101,16 @@ def setup_firecracker_vm() -> None:
         err("hdiutil failed to build seed ISO — aborting VM setup")
         return
 
-    print("  Writing VM start script ...")
-    start_script = _write_vm_start_script()
+    if backend == "qemu":
+        if not has_cmd("qemu-system-aarch64"):
+            err("qemu-system-aarch64 not found — install qemu via brew first.")
+            return
+        print("  Writing QEMU start script ...")
+        start_script = _write_qemu_start_script()
+    else:
+        start_script = _provision_virtualbox_vm(qcow2, seed_iso)
+        if start_script is None:
+            return
 
     print(f"  Booting VM via {start_script} ...")
     if run([str(start_script)], check=False).returncode != 0:
@@ -1970,11 +2130,13 @@ def setup_firecracker_vm() -> None:
     print("  Installing firecracker() wrapper into ~/.zshrc ...")
     _install_firecracker_zsh_function(_firecracker_zsh_function(priv_key))
 
-    print(f"  firecracker VM ready. Start manually with: {start_script}")
-    print(f"  Note: firecracker microVMs need /dev/kvm in the guest — macOS HVF")
-    print(f"  does not expose nested KVM, so spawning microVMs from inside this")
-    print(f"  Fedora guest will not work. firecracker CLI ops (--version, etc.)")
-    print(f"  and dry-run/api-sock setup will still function.")
+    print(f"  firecracker VM ready (backend: {backend}).")
+    print(f"  Start manually with: {start_script}")
+    if backend == "qemu":
+        print(f"  Nested virt is on (el2=on); the guest's KVM can launch "
+              f"firecracker microVMs.")
+    else:
+        print(f"  Nested VT-x is on; the guest's KVM can launch firecracker microVMs.")
 
 # ── packages module loader ────────────────────────────────────────────────────
 
