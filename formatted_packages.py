@@ -52,6 +52,7 @@ SYSTEM_PACKAGES: list[str] = [
     "wireshark",
     "yt-dlp",
     "zoom",
+    "zsh",
     "bzip2",
     "bzip2-devel",
     "gdbm-libs",
@@ -111,4 +112,5 @@ CUSTOM_PACKAGES: list[dict] = [
     {"name": "nvm"},
     {"name": "pyenv"},
     {"name": "pip"},
+    {"name": "oh-my-zsh"},
 ]

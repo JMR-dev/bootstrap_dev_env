@@ -158,6 +158,22 @@ def detect_pkg_mgr() -> str:
 
 PKG_MGR = detect_pkg_mgr()
 
+
+def _is_rhel_family() -> bool:
+    """True for RHEL-derived distros (Fedora, RHEL, CentOS, Rocky, Alma, ...)."""
+    try:
+        data = Path("/etc/os-release").read_text()
+    except OSError:
+        return PKG_MGR == "dnf"
+    tokens: list[str] = []
+    for line in data.splitlines():
+        if line.startswith(("ID=", "ID_LIKE=")):
+            _, _, val = line.partition("=")
+            tokens.extend(val.strip().strip('"').split())
+    return any(t in {"rhel", "fedora", "centos", "rocky", "almalinux"} for t in tokens)
+
+IS_RHEL_FAMILY = _is_rhel_family()
+
 # ── network helpers ───────────────────────────────────────────────────────────
 
 def _download(url: str, dest: Path) -> bool:
@@ -670,6 +686,7 @@ _DEFAULT_INSTALL_PATHS: dict[str, Path] = {
     "nvm":         Path("~/.nvm"),
     "pyenv":       Path("~/.pyenv"),
     "neovim":      Path(f"/opt/nvim-linux-{_ARCH_NVIM[ARCH]}"),
+    "oh-my-zsh":   Path("~/.oh-my-zsh"),
 }
 
 def _default_install_path(pkg: CustomPackage) -> Optional[Path]:
@@ -831,6 +848,45 @@ def _install_pip() -> None:
              "ensurepip-provided pip remains")
 
 
+def _install_oh_my_zsh() -> None:
+    """Install oh-my-zsh via its official installer and force ZSH_THEME=gnzh."""
+    if not has_cmd("zsh"):
+        err("zsh is not installed — required by oh-my-zsh")
+        return
+    if not has_cmd("git"):
+        err("git is not installed — required by oh-my-zsh")
+        return
+
+    target = Path.home() / ".oh-my-zsh"
+    if target.exists():
+        print(f"  oh-my-zsh already present at {target}; updating theme only")
+    else:
+        print("  Installing oh-my-zsh via the official installer ...")
+        installer = (
+            'sh -c "$(curl -fsSL '
+            'https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" '
+            '"" --unattended'
+        )
+        if shell(installer, check=False).returncode != 0:
+            err("oh-my-zsh installer failed")
+            return
+
+    zshrc = Path.home() / ".zshrc"
+    if not zshrc.exists():
+        warn("~/.zshrc not present after oh-my-zsh install; cannot set theme")
+        return
+
+    text = zshrc.read_text()
+    new_text, replaced = re.subn(r'^\s*ZSH_THEME=.*$', 'ZSH_THEME="gnzh"', text, flags=re.M)
+    if replaced == 0:
+        new_text = text.rstrip() + '\nZSH_THEME="gnzh"\n'
+    if new_text != text:
+        zshrc.write_text(new_text)
+        print('  Set ZSH_THEME="gnzh" in ~/.zshrc')
+    else:
+        print('  ~/.zshrc already has ZSH_THEME="gnzh"')
+
+
 def _install_nvm() -> None:
     data = _fetch_json("https://api.github.com/repos/nvm-sh/nvm/releases/latest")
     if data is None:
@@ -916,6 +972,55 @@ def _clone_nvim_config() -> None:
     print(f"  Renaming {temp_clone.name} to {config_dir.name} ...")
     temp_clone.rename(config_dir)
     print(f"  Neovim configuration ready at {config_dir}")
+
+
+def _invoking_user() -> str:
+    """User whose login shell / home we should target.
+
+    When the script is run via sudo, SUDO_USER is the original invoker;
+    otherwise the current process user is correct.
+    """
+    return os.environ.get("SUDO_USER") or getpass.getuser()
+
+
+def ensure_zsh_default() -> None:
+    """Make zsh the default login shell for the invoking user.
+
+    Uses ``usermod -s`` on RHEL-family distros and ``chsh -s`` elsewhere —
+    on Debian/Ubuntu ``chsh`` is the canonical (and PAM-permitted) path,
+    while on RHEL/Fedora ``chsh`` for another user often fails under the
+    default authselect config and ``usermod`` is the reliable alternative.
+    """
+    if not has_cmd("zsh"):
+        warn("zsh not installed — skipping default-shell change")
+        return
+
+    zsh_path = shutil.which("zsh") or "/bin/zsh"
+    user = _invoking_user()
+
+    import pwd
+    try:
+        current = pwd.getpwnam(user).pw_shell
+    except KeyError:
+        warn(f"user {user} not found in passwd; skipping default-shell change")
+        return
+
+    if current == zsh_path:
+        print(f"\n[zsh] {user}'s default shell is already {zsh_path}.")
+        return
+
+    family = "RHEL-family" if IS_RHEL_FAMILY else "Debian-family"
+    print(f"\n[zsh] Setting default shell for {user} to {zsh_path} ({family}) ...")
+
+    if IS_RHEL_FAMILY:
+        cmd = ["usermod", "-s", zsh_path, user]
+    else:
+        cmd = ["chsh", "-s", zsh_path, user]
+
+    if run(cmd, as_sudo=True, check=False).returncode != 0:
+        err(f"Failed to set default shell to zsh for {user}")
+    else:
+        print(f"[zsh] Default shell updated. Log out and back in for it to take effect.")
 
 
 def ensure_node_lts() -> None:
@@ -1147,6 +1252,9 @@ def install_custom_packages(to_install: list[CustomPackage]) -> None:
             continue
         if name_lower == "pip":
             _install_pip()
+            continue
+        if name_lower == "oh-my-zsh":
+            _install_oh_my_zsh()
             continue
         if name_lower == "neovim":
             with tempfile.TemporaryDirectory() as tmp_str:
@@ -1388,6 +1496,7 @@ def main() -> None:
 
     if args.only in (None, "system"):
         install_system_packages(sys_c["to_install_regular"], sys_c["to_install_special"])
+        ensure_zsh_default()
 
     if do_flatpak:
         install_flatpak_packages(flat_c["to_install"])
@@ -1409,6 +1518,15 @@ def main() -> None:
 
     write_run_log()
     print("\nDone.")
+
+    # Final step (user-requested): source ~/.zshrc.
+    # This runs in a subshell, so it only validates the rc file — the user's
+    # interactive shell is unaffected and they'll need to open a new terminal
+    # (or 'exec zsh') to pick up the new default shell.
+    zshrc = Path.home() / ".zshrc"
+    if has_cmd("zsh") and zshrc.exists():
+        print("\nSourcing ~/.zshrc ...")
+        shell(f"zsh -c 'source {zshrc}'", check=False)
 
 
 if __name__ == "__main__":
