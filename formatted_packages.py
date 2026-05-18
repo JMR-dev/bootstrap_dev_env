@@ -10,6 +10,10 @@ URL templates use ``str.format`` with the following substitutions:
     {version}   pkg.version (or the latest resolved version)
     {arch}      "x86_64" or "aarch64"
     {arch_go}   Go-style: "amd64" or "arm64"
+    {os}        "linux" or "macos"
+    {os_go}     Go-style: "linux" or "darwin"
+    {os_zig}    Zig-style: "linux" or "macos"
+    {os_nvim}   Neovim-style: "linux" or "macos"
 """
 
 SYSTEM_PACKAGES: list[str] = [
@@ -84,7 +88,7 @@ CUSTOM_PACKAGES: list[dict] = [
     {
         "name": "go",
         "version": "1.26.3",
-        "url_template": "https://go.dev/dl/go{version}.linux-{arch_go}.tar.gz",
+        "url_template": "https://go.dev/dl/go{version}.{os_go}-{arch_go}.tar.gz",
         "sha256": "2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556",
         "fetch_latest": "go",
     },
@@ -102,9 +106,9 @@ CUSTOM_PACKAGES: list[dict] = [
     {
         "name": "zig",
         "version": "0.16.0",
-        "url_template": "https://ziglang.org/download/{version}/zig-{arch}-linux-{version}.tar.xz",
+        "url_template": "https://ziglang.org/download/{version}/zig-{arch}-{os_zig}-{version}.tar.xz",
         "sha256_url_template": (
-            "https://ziglang.org/download/{version}/zig-{arch}-linux-{version}.tar.xz.minisig"
+            "https://ziglang.org/download/{version}/zig-{arch}-{os_zig}-{version}.tar.xz.minisig"
         ),
         "minisign_key": "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U",
         "fetch_latest": "zig",
