@@ -110,4 +110,5 @@ CUSTOM_PACKAGES: list[dict] = [
     },
     {"name": "nvm"},
     {"name": "pyenv"},
+    {"name": "pip"},
 ]

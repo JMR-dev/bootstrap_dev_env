@@ -676,8 +676,24 @@ def _default_install_path(pkg: CustomPackage) -> Optional[Path]:
     return _DEFAULT_INSTALL_PATHS.get(pkg.name.lower())
 
 
+def _pip_installed() -> bool:
+    if not has_cmd("python3"):
+        return False
+    return subprocess.run(
+        ["python3", "-m", "pip", "--version"],
+        capture_output=True, check=False,
+    ).returncode == 0
+
+
 def is_custom_pkg_installed(pkg: CustomPackage) -> tuple[bool, Optional[Path]]:
-    """Return (is_installed, check_path)."""
+    """Return (is_installed, check_path).
+
+    For most custom packages the check is a filesystem path. ``pip`` is the
+    exception: it ships inside a Python distribution rather than at a known
+    path, so it's detected by running ``python3 -m pip --version``.
+    """
+    if pkg.name.lower() == "pip":
+        return _pip_installed(), None
     raw = Path(pkg.install_path) if pkg.install_path else _default_install_path(pkg)
     if raw is None:
         return False, None
@@ -786,6 +802,33 @@ def _install_pyenv() -> None:
         err("pyenv installation failed")
         return
     print("  pyenv installed to ~/.pyenv")
+
+
+def _install_pip() -> None:
+    """Install pip via Python's bundled ``ensurepip`` module, then self-upgrade.
+
+    Unlike the other custom packages, pip ships inside CPython itself and is
+    bootstrapped from the wheel in the standard library rather than downloaded.
+    """
+    if not has_cmd("python3"):
+        err("python3 is not installed — cannot install pip")
+        return
+    print("  Bootstrapping pip via 'python3 -m ensurepip --upgrade' ...")
+    bootstrap = run(
+        ["python3", "-m", "ensurepip", "--upgrade"],
+        as_sudo=True, check=False,
+    )
+    if bootstrap.returncode != 0:
+        err("python3 -m ensurepip failed (system Python may need a distro 'python3-pip' package)")
+        return
+    print("  Upgrading pip to the latest version ...")
+    upgrade = run(
+        ["python3", "-m", "pip", "install", "--upgrade", "pip"],
+        as_sudo=True, check=False,
+    )
+    if upgrade.returncode != 0:
+        warn("pip self-upgrade failed (likely PEP 668 externally-managed); "
+             "ensurepip-provided pip remains")
 
 
 def _install_nvm() -> None:
@@ -1088,13 +1131,12 @@ def _resolve_latest(pkg: CustomPackage) -> None:
 def install_custom_packages(to_install: list[CustomPackage]) -> None:
     print("\n=== Custom Packages ===")
     for pkg in to_install:
+        name_lower = pkg.name.lower()
         _, check_path = is_custom_pkg_installed(pkg)
         print(f"\n  Installing {pkg.display_name} ..."
               + (f" (install path: {check_path})" if check_path else ""))
-        if check_path is None:
+        if check_path is None and name_lower != "pip":
             warn(f"{pkg.name}: no known install path — script will not detect future installs")
-
-        name_lower = pkg.name.lower()
 
         # Handlers that manage their own download/install
         if name_lower == "nvm":
@@ -1102,6 +1144,9 @@ def install_custom_packages(to_install: list[CustomPackage]) -> None:
             continue
         if name_lower == "pyenv":
             _install_pyenv()
+            continue
+        if name_lower == "pip":
+            _install_pip()
             continue
         if name_lower == "neovim":
             with tempfile.TemporaryDirectory() as tmp_str:
@@ -1221,7 +1266,7 @@ def print_check_summary(sys_c: dict, flat_c: dict, cust_c: dict, only: Optional[
         ok = cust_c["already_installed"]
         print("\nCustom packages:")
         for pkg, path in ok:
-            print(f"  [OK]      {pkg.display_name}  ({path})")
+            print(f"  [OK]      {pkg.display_name}" + (f"  ({path})" if path else ""))
         for pkg in to:
             _, path = is_custom_pkg_installed(pkg)
             print(f"  [INSTALL] {pkg.display_name}" + (f"  → {path}" if path else ""))
