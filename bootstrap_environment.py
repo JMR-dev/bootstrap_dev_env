@@ -389,11 +389,14 @@ _OVERRIDES: dict[str, dict[str, Optional[list[str]]]] = {
     },
     "apt-get": {
         "ffmpeg-free":     ["ffmpeg"],                    # Fedora-specific name
+        "lua":             ["lua5.4"],                    # Debian ships versioned packages only
+        "qemu":            ["qemu-system"],               # Debian meta-package name
         "rg":              ["ripgrep"],
         # Python build deps — Fedora/RHEL naming differs from Debian/Ubuntu
         "bzip2-devel":     ["libbz2-dev"],
         "gdbm-libs":       ["libgdbm-dev"],
         "libffi-devel":    ["libffi-dev"],
+        "libnsl2":         ["libnsl-dev"],                # Debian package name
         "libuuid-devel":   ["uuid-dev"],
         "libxml2-devel":   ["libxml2-dev"],
         "libzstd-devel":   ["libzstd-dev"],
@@ -630,6 +633,48 @@ def setup_temurin_repo() -> None:
             "sudo apt-get update"
         )
 
+def setup_dotnet_repo() -> None:
+    # .NET is in Fedora repos directly — no extra repo needed.
+    if PKG_MGR != "apt-get":
+        return
+    if _repo_file_exists(
+        "/etc/apt/sources.list.d/microsoft-prod.list",
+        "/etc/apt/sources.list.d/dotnet.list",
+    ):
+        return
+    distro_id  = _os_release_field("ID").strip('"')
+    version_id = _os_release_field("VERSION_ID").strip('"')
+    deb_url = (
+        f"https://packages.microsoft.com/config/{distro_id}/{version_id}"
+        "/packages-microsoft-prod.deb"
+    )
+    shell(
+        f"curl -fsSL {deb_url} -o /tmp/packages-microsoft-prod.deb && "
+        "sudo dpkg -i /tmp/packages-microsoft-prod.deb && "
+        "sudo apt-get update"
+    )
+
+def setup_pulumi_repo() -> None:
+    if PKG_MGR == "dnf":
+        if _repo_file_exists("/etc/yum.repos.d/pulumi.repo"):
+            return
+        _write_dnf_repo(
+            "pulumi", "Pulumi",
+            "https://yum.releases.pulumi.com/",
+            "https://api.pulumi.com/releases/sdk/rpm-keyring.gpg",
+        )
+    elif PKG_MGR == "apt-get":
+        if _repo_file_exists("/etc/apt/sources.list.d/pulumi-releases.list"):
+            return
+        shell(
+            "curl -fsSL https://api.pulumi.com/releases/sdk/apt-keyring.gpg | "
+            "sudo gpg --dearmor -o /usr/share/keyrings/pulumi-releases-keyring.gpg && "
+            "echo 'deb [signed-by=/usr/share/keyrings/pulumi-releases-keyring.gpg] "
+            "https://apt.releases.pulumi.com/ stable main' | "
+            "sudo tee /etc/apt/sources.list.d/pulumi-releases.list > /dev/null && "
+            "sudo apt-get update"
+        )
+
 _REPO_GROUPS: list[tuple[set[str], callable]] = [
     (
         {"containerd.io", "docker-buildx-plugin", "docker-ce-cli",
@@ -640,6 +685,8 @@ _REPO_GROUPS: list[tuple[set[str], callable]] = [
     ({"google-chrome-stable"}, setup_chrome_repo),
     ({"vivaldi-stable"}, setup_vivaldi_repo),
     ({"temurin-25-jdk"}, setup_temurin_repo),
+    ({"dotnet-sdk-10.0"}, setup_dotnet_repo),
+    ({"pulumi"}, setup_pulumi_repo),
 ]
 
 # ── special package installers ────────────────────────────────────────────────
@@ -1085,6 +1132,8 @@ def _install_pip() -> None:
 
     Unlike the other custom packages, pip ships inside CPython itself and is
     bootstrapped from the wheel in the standard library rather than downloaded.
+    Debian intentionally disables ensurepip in the system Python package, so we
+    fall back to the distro's python3-pip package before giving up.
     """
     if not has_cmd("python3"):
         err("python3 is not installed — cannot install pip")
@@ -1095,8 +1144,15 @@ def _install_pip() -> None:
         as_sudo=True, check=False,
     )
     if bootstrap.returncode != 0:
-        err("python3 -m ensurepip failed (system Python may need a distro 'python3-pip' package)")
-        return
+        if PKG_MGR == "apt-get":
+            warn("ensurepip unavailable in system Python — installing python3-pip via apt-get")
+            apt_result = run(["apt-get", "install", "-y", "python3-pip"], as_sudo=True, check=False)
+            if apt_result.returncode != 0:
+                err("python3-pip failed to install via apt-get — skipping pip bootstrap")
+                return
+        else:
+            err("python3 -m ensurepip failed (system Python may need a distro 'python3-pip' package)")
+            return
     print("  Upgrading pip to the latest version ...")
     upgrade = run(
         ["python3", "-m", "pip", "install", "--upgrade", "pip"],
