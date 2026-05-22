@@ -93,6 +93,12 @@ def print_notices() -> None:
 
 # ── subprocess helpers ────────────────────────────────────────────────────────
 
+# Default per-call cap for run()/shell(). Generous enough for heavy installs
+# (apt, brew, large downloads) but bounded so a stuck command can't hang the
+# bootstrap forever. Override per-call for genuinely longer operations
+# (e.g. pyenv compiles).
+DEFAULT_SUBPROCESS_TIMEOUT: float = 1800
+
 def run(
     cmd: list,
     *,
@@ -101,6 +107,7 @@ def run(
     input: Optional[bytes] = None,
     capture_output: bool = False,
     cwd: Optional[str] = None,
+    timeout: Optional[float] = DEFAULT_SUBPROCESS_TIMEOUT,
 ) -> subprocess.CompletedProcess:
     if as_sudo and os.geteuid() != 0:
         cmd = ["sudo"] + cmd
@@ -108,8 +115,13 @@ def run(
     try:
         return subprocess.run(
             cmd, check=check, input=input,
-            capture_output=capture_output, cwd=cwd,
+            capture_output=capture_output, cwd=cwd, timeout=timeout,
         )
+    except subprocess.TimeoutExpired as exc:
+        warn(f"{cmd[0]!r} timed out after {exc.timeout}s")
+        if check:
+            raise
+        return subprocess.CompletedProcess(cmd, returncode=124)
     except OSError as exc:
         if check:
             raise
@@ -122,13 +134,19 @@ def shell(
     check: bool = True,
     capture_output: bool = False,
     text: bool = False,
+    timeout: Optional[float] = DEFAULT_SUBPROCESS_TIMEOUT,
 ) -> subprocess.CompletedProcess:
     print(f"  $ {cmd}")
     try:
         return subprocess.run(
             cmd, shell=True, check=check,
-            capture_output=capture_output, text=text,
+            capture_output=capture_output, text=text, timeout=timeout,
         )
+    except subprocess.TimeoutExpired as exc:
+        warn(f"shell command timed out after {exc.timeout}s")
+        if check:
+            raise
+        return subprocess.CompletedProcess(cmd, returncode=124)
     except OSError as exc:
         if check:
             raise
@@ -219,7 +237,10 @@ def check_sudo() -> None:
     if not has_cmd("sudo"):
         sys.exit("sudo is required but not installed.")
     print("Validating sudo access ...")
-    result = subprocess.run(["sudo", "-v"], check=False)
+    try:
+        result = subprocess.run(["sudo", "-v"], check=False, timeout=120)
+    except subprocess.TimeoutExpired:
+        sys.exit("sudo authentication timed out.")
     if result.returncode != 0:
         sys.exit("sudo authentication failed.")
 
@@ -229,15 +250,19 @@ def ensure_xcode_clt() -> None:
     """Install the Xcode Command Line Tools if missing. macOS only."""
     if not IS_MACOS:
         return
-    result = subprocess.run(["xcode-select", "-p"], capture_output=True, check=False)
+    result = subprocess.run(
+        ["xcode-select", "-p"], capture_output=True, check=False, timeout=10,
+    )
     if result.returncode == 0:
         print(f"[Xcode CLT] Already installed at {result.stdout.decode().strip()}")
         return
     print("[Xcode CLT] Installing Xcode Command Line Tools ...")
     print("           A GUI dialog will appear — click 'Install' to proceed.")
-    subprocess.run(["xcode-select", "--install"], check=False)
+    subprocess.run(["xcode-select", "--install"], check=False, timeout=30)
     print("           Waiting for installation to complete ...")
-    while subprocess.run(["xcode-select", "-p"], capture_output=True).returncode != 0:
+    while subprocess.run(
+        ["xcode-select", "-p"], capture_output=True, timeout=10,
+    ).returncode != 0:
         time.sleep(5)
     print("[Xcode CLT] Installation complete.")
 
@@ -350,31 +375,39 @@ def _fetch_text(url: str) -> Optional[str]:
 
 # ── installation checks ───────────────────────────────────────────────────────
 
+def _probe(cmd: list, *, timeout: float = 30) -> Optional[subprocess.CompletedProcess]:
+    """Run a short read-only probe. Returns None on timeout or launch failure."""
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        warn(f"{cmd[0]!r} probe failed: {exc}")
+        return None
+
+
 def is_system_pkg_installed(pkg: str) -> bool:
     if PKG_MGR == "dnf":
-        return subprocess.run(["rpm", "-q", pkg], capture_output=True).returncode == 0
+        r = _probe(["rpm", "-q", pkg])
+        return r is not None and r.returncode == 0
     elif PKG_MGR == "apt-get":
-        result = subprocess.run(
-            ["dpkg-query", "-W", "-f=${Status}", pkg],
-            capture_output=True, text=True, check=False,
-        )
-        return "install ok installed" in result.stdout
+        r = _probe(["dpkg-query", "-W", "-f=${Status}", pkg])
+        return r is not None and "install ok installed" in r.stdout
     elif PKG_MGR == "brew":
         if not has_cmd("brew"):
             return False
-        if subprocess.run(["brew", "list", "--formula", pkg],
-                          capture_output=True, check=False).returncode == 0:
-            return True
-        if subprocess.run(["brew", "list", "--cask", pkg],
-                          capture_output=True, check=False).returncode == 0:
-            return True
+        for kind in ("--formula", "--cask"):
+            r = _probe(["brew", "list", kind, pkg], timeout=60)
+            if r is not None and r.returncode == 0:
+                return True
         return False
     return False
 
 def is_flatpak_installed(app_id: str) -> bool:
     if not has_cmd("flatpak"):
         return False
-    return subprocess.run(["flatpak", "info", app_id], capture_output=True).returncode == 0
+    r = _probe(["flatpak", "info", app_id])
+    return r is not None and r.returncode == 0
 
 def is_special_pkg_installed(pkg: str) -> bool:
     if pkg == "obsidian":
@@ -1413,10 +1446,14 @@ def ensure_node_lts() -> None:
 
 def _latest_stable_python(pyenv_bin: Path) -> Optional[str]:
     """Return the latest stable CPython 3.x version string from `pyenv install --list`."""
-    result = subprocess.run(
-        [str(pyenv_bin), "install", "--list"],
-        capture_output=True, text=True, check=False,
-    )
+    try:
+        result = subprocess.run(
+            [str(pyenv_bin), "install", "--list"],
+            capture_output=True, text=True, check=False, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        err("pyenv install --list timed out")
+        return None
     if result.returncode != 0:
         err("pyenv install --list failed")
         return None
@@ -1455,10 +1492,14 @@ def ensure_python_latest() -> Optional[threading.Thread]:
         err("Could not determine latest stable Python from pyenv")
         return None
 
-    installed = subprocess.run(
-        [str(pyenv_bin), "versions", "--bare"],
-        capture_output=True, text=True, check=False,
-    ).stdout.split()
+    try:
+        installed = subprocess.run(
+            [str(pyenv_bin), "versions", "--bare"],
+            capture_output=True, text=True, check=False, timeout=30,
+        ).stdout.split()
+    except subprocess.TimeoutExpired:
+        err("pyenv versions --bare timed out")
+        return None
 
     if latest in installed:
         # Fast path — no compile needed, just set global synchronously.
@@ -1474,7 +1515,15 @@ def ensure_python_latest() -> Optional[threading.Thread]:
 
     def _worker():
         install_cmd = [str(pyenv_bin), "install", "--skip-existing", latest]
-        p1 = subprocess.run(install_cmd, capture_output=True, text=True, check=False)
+        try:
+            p1 = subprocess.run(
+                install_cmd, capture_output=True, text=True, check=False,
+                timeout=3600,
+            )
+        except subprocess.TimeoutExpired:
+            elapsed = int(time.monotonic() - start)
+            err(f"pyenv install {latest} timed out after {elapsed}s")
+            return
         elapsed = int(time.monotonic() - start)
         if p1.returncode != 0:
             err(f"pyenv install {latest} failed after {elapsed}s")
@@ -1482,10 +1531,14 @@ def ensure_python_latest() -> Optional[threading.Thread]:
             if tail:
                 print(f"\n[pyenv stderr tail]\n{tail}")
             return
-        p2 = subprocess.run(
-            [str(pyenv_bin), "global", latest],
-            capture_output=True, text=True, check=False,
-        )
+        try:
+            p2 = subprocess.run(
+                [str(pyenv_bin), "global", latest],
+                capture_output=True, text=True, check=False, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            err(f"pyenv global {latest} timed out")
+            return
         if p2.returncode != 0:
             err(f"pyenv global {latest} failed")
             return
@@ -1759,9 +1812,13 @@ def _yn(prompt: str) -> bool:
 
 
 def _gh_logged_in() -> bool:
-    return subprocess.run(
-        ["gh", "auth", "status"], capture_output=True, check=False
-    ).returncode == 0
+    try:
+        return subprocess.run(
+            ["gh", "auth", "status"], capture_output=True, check=False, timeout=30,
+        ).returncode == 0
+    except subprocess.TimeoutExpired:
+        warn("gh auth status timed out — treating as not logged in")
+        return False
 
 
 def _offer_github_upload(pub_keys: list[Path]) -> None:
@@ -1792,7 +1849,11 @@ def check_and_setup_ssh() -> None:
     if not _yn("\n[GitHub CLI] Would you like to authenticate the GitHub CLI? [y/N] "):
         return
 
-    result = subprocess.run(["gh", "auth", "login"], check=False)
+    try:
+        result = subprocess.run(["gh", "auth", "login"], check=False, timeout=900)
+    except subprocess.TimeoutExpired:
+        err("gh auth login timed out — skipping key upload.")
+        return
     if result.returncode != 0:
         err("gh auth login failed — skipping key upload.")
         return
@@ -1981,17 +2042,20 @@ rm -f {_VM_PID_NAME}
 
 
 def _ssh_to_vm(priv_key: Path, *remote: str, timeout: int = 3) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["ssh", "-q",
-         "-i", str(priv_key),
-         "-p", str(_VM_SSH_PORT),
-         "-o", "StrictHostKeyChecking=no",
-         "-o", "UserKnownHostsFile=/dev/null",
-         "-o", f"ConnectTimeout={timeout}",
-         "-o", "LogLevel=ERROR",
-         f"{_VM_USER}@127.0.0.1", *remote],
-        capture_output=True, check=False,
-    )
+    try:
+        return subprocess.run(
+            ["ssh", "-q",
+             "-i", str(priv_key),
+             "-p", str(_VM_SSH_PORT),
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             "-o", f"ConnectTimeout={timeout}",
+             "-o", "LogLevel=ERROR",
+             f"{_VM_USER}@127.0.0.1", *remote],
+            capture_output=True, check=False, timeout=timeout + 30,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(["ssh"], returncode=124, stdout=b"", stderr=b"")
 
 
 def _wait_for_vm_ssh(priv_key: Path, timeout_s: int = 300) -> bool:
@@ -2081,9 +2145,9 @@ def _apple_silicon_generation() -> Optional[int]:
     try:
         brand = subprocess.run(
             ["sysctl", "-n", "machdep.cpu.brand_string"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, timeout=10,
         ).stdout.strip()
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     m = re.search(r"Apple M(\d+)", brand)
     return int(m.group(1)) if m else None
@@ -2150,10 +2214,14 @@ def _provision_virtualbox_vm(qcow2: Path, seed_iso: Path) -> Optional[Path]:
     vbox_base = _VM_DIR / "vbox"
     vdi = _VM_DIR / "fedora.vdi"
 
-    exists = subprocess.run(
-        ["VBoxManage", "showvminfo", vm_name],
-        capture_output=True, check=False,
-    ).returncode == 0
+    try:
+        exists = subprocess.run(
+            ["VBoxManage", "showvminfo", vm_name],
+            capture_output=True, check=False, timeout=30,
+        ).returncode == 0
+    except subprocess.TimeoutExpired:
+        warn("VBoxManage showvminfo timed out — assuming VM does not exist")
+        exists = False
 
     if not exists:
         if not vdi.exists():
