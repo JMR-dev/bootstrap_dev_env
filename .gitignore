@@ -1,1 +1,4 @@
-__pycache__/
+dist/
+bootstrap_dev_env
+bootstrap_environment
+bootstrap_run.log
