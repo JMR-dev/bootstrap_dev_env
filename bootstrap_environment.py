@@ -5,7 +5,7 @@ Bootstrap packages declared in formatted_packages.py.
 Sections handled:
   System Packages  — installed via dnf, apt-get, or brew (macOS)
   Flatpak Packages — installed via flatpak from Flathub (Linux only;
-                     skipped with --no-gui and skipped entirely on macOS)
+                     skipped by default and skipped entirely on macOS; use --gui to enable)
   Custom Packages  — downloaded, verified, extracted
   macOS firecracker VM — provisions a Fedora cloud image under a
                      hypervisor that supports nested virtualization,
@@ -23,8 +23,8 @@ Xcode Command Line Tools and Homebrew, which is then used as the system
 package manager.
 
 Usage:
-  Linux:  sudo python3 bootstrap_environment.py [--only system|flatpak|custom] [--no-gui]
-  macOS:       python3 bootstrap_environment.py [--only system|custom] [--no-gui] [--no-vm]
+  Linux:  sudo python3 bootstrap_environment.py [--only system|flatpak|custom] [--gui]
+  macOS:       python3 bootstrap_environment.py [--only system|custom] [--gui] [--no-vm]
                (do NOT use sudo on macOS — Homebrew refuses to run as root)
 """
 
@@ -649,7 +649,7 @@ _SPECIAL_PKGS: set[str] = (
     else {"github-desktop", "zoom", "obsidian", "minikube", "bashtop", "pipx", "poetry"}
 )
 
-# GUI apps — skipped when --no-gui is passed (headless environments).
+# GUI apps — skipped by default (headless); included only when --gui is passed.
 _GUI_SYSTEM_PKGS = {
     "github-desktop",
     "google-chrome-stable",
@@ -2226,10 +2226,10 @@ def main() -> None:
     )
     ap.add_argument("--only", choices=["system", "flatpak", "custom"],
                     help="Install only the named section")
-    ap.add_argument("--no-gui", action="store_true",
-                    help="Skip GUI applications (suitable for headless environments). "
-                         "Excludes GUI system packages and skips the entire Flatpak "
-                         "section, including installing flatpak itself.")
+    ap.add_argument("--gui", action="store_true",
+                    help="Include GUI applications (headed environments). "
+                         "Adds GUI system packages and enables the Flatpak "
+                         "section. By default GUI apps and Flatpak are skipped.")
     ap.add_argument("--no-vm", action="store_true",
                     help="macOS only: skip provisioning the Fedora-on-QEMU VM that "
                          "backs the firecracker() zsh wrapper.")
@@ -2245,8 +2245,8 @@ def main() -> None:
     print(f"OS:              {OS}")
     print(f"Architecture:    {ARCH}")
     print(f"Package manager: {PKG_MGR}")
-    if args.no_gui:
-        print("Mode:            headless (--no-gui) — skipping GUI apps and Flatpak")
+    if not args.gui:
+        print("Mode:            headless (default) — skipping GUI apps and Flatpak")
 
     if IS_MACOS:
         # Refuse to run as root before doing anything (brew won't run as root).
@@ -2256,19 +2256,18 @@ def main() -> None:
 
     print("Checking installed packages ...")
 
-    if args.no_gui:
+    if not args.gui:
         skipped_gui = [p for p in system_pkgs if p in _GUI_SYSTEM_PKGS]
         system_pkgs = [p for p in system_pkgs if p not in _GUI_SYSTEM_PKGS]
         if skipped_gui:
-            print(f"  [NO-GUI] Skipping GUI system packages: {_fmt(skipped_gui)}")
+            print(f"  [HEADLESS] Skipping GUI system packages: {_fmt(skipped_gui)}")
         flatpak_pkgs = []
 
     # Flatpak is Linux-only — macOS has no Flatpak section regardless of flags.
-    # --no-gui also suppresses the Flatpak section entirely (both `flatpak`
-    # itself and the Flathub apps), even when --only=flatpak is requested.
+    # GUI apps and Flatpak are skipped by default; --gui re-enables them.
     do_flatpak = (
         args.only in (None, "flatpak")
-        and not args.no_gui
+        and args.gui
         and not IS_MACOS
     )
 
