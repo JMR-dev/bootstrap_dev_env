@@ -79,6 +79,18 @@ def write_run_log() -> None:
     RUN_LOG.write_text("\n".join(lines) + "\n")
     print(f"\n{len(_issues)} issue(s) logged to: {RUN_LOG}")
 
+_notices: list[str] = []
+
+def notice(msg: str) -> None:
+    _notices.append(msg)
+
+def print_notices() -> None:
+    if not _notices:
+        return
+    print("\nNotices:")
+    for n in _notices:
+        print(f"  • {n}")
+
 # ── subprocess helpers ────────────────────────────────────────────────────────
 
 def run(
@@ -1290,21 +1302,12 @@ def _clone_nvim_config() -> None:
     print(f"\n[Neovim] Setting up configuration from {repo_url} ...")
 
     if config_dir.exists():
-        if (config_dir / ".git").is_dir():
-            remote = subprocess.run(
-                ["git", "-C", str(config_dir), "remote", "get-url", "origin"],
-                capture_output=True, text=True, check=False,
-            )
-            current = remote.stdout.strip()
-            if remote.returncode == 0 and current == repo_url:
-                print(f"  Configuration already cloned at {config_dir} — skipping.")
-                return
-            warn(f"{config_dir} has a different git remote ({current!r}); "
-                 f"leaving it untouched. Remove it manually to re-clone.")
-            return
-        warn(f"{config_dir} exists but is not a git repo; leaving it untouched. "
-             f"Remove it manually to clone the Neovim configuration.")
-        return
+        n = 1
+        while (backup := config_dir.with_name(f"nvim-{n}")).exists():
+            n += 1
+        print(f"  Renaming existing {config_dir} → {backup} ...")
+        config_dir.rename(backup)
+        notice(f"Previous Neovim config preserved at {backup}")
 
     config_dir.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2412,6 +2415,7 @@ def main() -> None:
         pyenv_thread.join()
 
     write_run_log()
+    print_notices()
     print("\nDone.")
 
     # Final step (user-requested): source ~/.zshrc.
