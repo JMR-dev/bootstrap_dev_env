@@ -79,6 +79,18 @@ def write_run_log() -> None:
     RUN_LOG.write_text("\n".join(lines) + "\n")
     print(f"\n{len(_issues)} issue(s) logged to: {RUN_LOG}")
 
+_notices: list[str] = []
+
+def notice(msg: str) -> None:
+    _notices.append(msg)
+
+def print_notices() -> None:
+    if not _notices:
+        return
+    print("\nNotices:")
+    for n in _notices:
+        print(f"  • {n}")
+
 # ── subprocess helpers ────────────────────────────────────────────────────────
 
 def run(
@@ -1290,28 +1302,29 @@ def _clone_nvim_config() -> None:
     print(f"\n[Neovim] Setting up configuration from {repo_url} ...")
 
     if config_dir.exists():
-        print(f"  Removing existing configuration at {config_dir} ...")
-        shutil.rmtree(config_dir)
+        n = 1
+        while (backup := config_dir.with_name(f"nvim-{n}")).exists():
+            n += 1
+        print(f"  Renaming existing {config_dir} → {backup} ...")
+        config_dir.rename(backup)
+        notice(f"Previous Neovim config preserved at {backup}")
 
     config_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"  Cloning to {config_dir} ...")
-    # We use a temp clone and then move to ensure we handle the "rename" part of the request
-    # although cloning directly to 'nvim' is effectively the same.
-    # The user asked: "clones my nvim config to $HOME/.config/$REPO and renames the repo root folder to just nvim"
-    repo_name = repo_url.split("/")[-1].replace(".git", "")
+    repo_name = repo_url.split("/")[-1].removesuffix(".git")
     temp_clone = config_dir.parent / repo_name
-
     if temp_clone.exists():
         shutil.rmtree(temp_clone)
 
+    print(f"  Cloning to {config_dir} ...")
     result = run(["git", "clone", repo_url, str(temp_clone)], check=False)
     if result.returncode != 0:
         err("Neovim configuration clone failed")
         return
 
-    print(f"  Renaming {temp_clone.name} to {config_dir.name} ...")
-    temp_clone.rename(config_dir)
+    if temp_clone != config_dir:
+        print(f"  Renaming {temp_clone.name} to {config_dir.name} ...")
+        temp_clone.rename(config_dir)
     print(f"  Neovim configuration ready at {config_dir}")
 
 
@@ -2402,6 +2415,7 @@ def main() -> None:
         pyenv_thread.join()
 
     write_run_log()
+    print_notices()
     print("\nDone.")
 
     # Final step (user-requested): source ~/.zshrc.
