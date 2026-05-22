@@ -1041,10 +1041,14 @@ def _default_install_path(pkg: CustomPackage) -> Optional[Path]:
 def _pip_installed() -> bool:
     if not has_cmd("python3"):
         return False
-    return subprocess.run(
-        ["python3", "-m", "pip", "--version"],
-        capture_output=True, check=False,
-    ).returncode == 0
+    try:
+        return subprocess.run(
+            ["python3", "-m", "pip", "--version"],
+            capture_output=True, check=False, timeout=10,
+        ).returncode == 0
+    except subprocess.TimeoutExpired:
+        warn("pip detection timed out — treating as not installed")
+        return False
 
 
 def is_custom_pkg_installed(pkg: CustomPackage) -> tuple[bool, Optional[Path]]:
