@@ -168,6 +168,7 @@ _ARCH_GO       = {"x86_64": "amd64",  "aarch64": "arm64"}
 _ARCH_MINIKUBE = {"x86_64": "amd64",  "aarch64": "arm64"}
 _ARCH_DEB      = {"x86_64": "amd64",  "aarch64": "arm64"}
 _ARCH_NVIM     = {"x86_64": "x86_64", "aarch64": "arm64"}
+_ARCH_PULUMI   = {"x86_64": "x64",    "aarch64": "arm64"}
 
 def _url_format(template: str, version: Optional[str]) -> str:
     """Interpolate {version}, {arch}, {arch_go}, {os}, {os_go}, {os_zig}, {os_nvim}."""
@@ -370,6 +371,8 @@ def is_special_pkg_installed(pkg: str) -> bool:
         return Path("/usr/local/bin/minikube").exists() or has_cmd("minikube")
     if pkg == "bashtop":
         return Path("/usr/local/bin/bashtop").exists() or (Path.home() / "bashtop").exists()
+    if pkg == "pulumi":
+        return Path("/opt/pulumi/pulumi").exists() or has_cmd("pulumi")
     if pkg == "pipx":
         return has_cmd("pipx")
     if pkg == "poetry":
@@ -654,27 +657,6 @@ def setup_dotnet_repo() -> None:
         "sudo apt-get update"
     )
 
-def setup_pulumi_repo() -> None:
-    if PKG_MGR == "dnf":
-        if _repo_file_exists("/etc/yum.repos.d/pulumi.repo"):
-            return
-        _write_dnf_repo(
-            "pulumi", "Pulumi",
-            "https://yum.releases.pulumi.com/",
-            "https://api.pulumi.com/releases/sdk/rpm-keyring.gpg",
-        )
-    elif PKG_MGR == "apt-get":
-        if _repo_file_exists("/etc/apt/sources.list.d/pulumi-releases.list"):
-            return
-        shell(
-            "curl -fsSL https://api.pulumi.com/releases/sdk/apt-keyring.gpg | "
-            "sudo gpg --dearmor -o /usr/share/keyrings/pulumi-releases-keyring.gpg && "
-            "echo 'deb [signed-by=/usr/share/keyrings/pulumi-releases-keyring.gpg] "
-            "https://apt.releases.pulumi.com/ stable main' | "
-            "sudo tee /etc/apt/sources.list.d/pulumi-releases.list > /dev/null && "
-            "sudo apt-get update"
-        )
-
 _REPO_GROUPS: list[tuple[set[str], callable]] = [
     (
         {"containerd.io", "docker-buildx-plugin", "docker-ce-cli",
@@ -686,14 +668,13 @@ _REPO_GROUPS: list[tuple[set[str], callable]] = [
     ({"vivaldi-stable"}, setup_vivaldi_repo),
     ({"temurin-25-jdk"}, setup_temurin_repo),
     ({"dotnet-sdk-10.0"}, setup_dotnet_repo),
-    ({"pulumi"}, setup_pulumi_repo),
 ]
 
 # ── special package installers ────────────────────────────────────────────────
 
 _SPECIAL_PKGS: set[str] = (
     set() if IS_MACOS
-    else {"github-desktop", "zoom", "obsidian", "minikube", "bashtop", "pipx", "poetry"}
+    else {"github-desktop", "zoom", "obsidian", "minikube", "bashtop", "pipx", "poetry", "pulumi"}
 )
 
 # GUI apps — skipped by default (headless); included only when --gui is passed.
@@ -833,6 +814,46 @@ def _install_bashtop(_tmp: Path) -> None:
     print(f"  bashtop installed. Clone at {clone_dir}, binary at /usr/local/bin/bashtop")
 
 
+def _install_pulumi(tmp: Path) -> None:
+    version = _fetch_text("https://www.pulumi.com/latest-version")
+    if not version:
+        err("Could not determine latest Pulumi version")
+        return
+    os_token = _OS_GO[OS]
+    arch_token = _ARCH_PULUMI[ARCH]
+    tarball = f"pulumi-v{version}-{os_token}-{arch_token}.tar.gz"
+    base = f"https://github.com/pulumi/pulumi/releases/download/v{version}"
+    dest = tmp / tarball
+    if not _download(f"{base}/{tarball}", dest):
+        return
+
+    checksums = _fetch_text(f"{base}/pulumi-{version}-checksums.txt")
+    if not checksums:
+        err("Could not fetch Pulumi checksums")
+        return
+    expected = next(
+        (line.split()[0] for line in checksums.splitlines() if line.endswith(tarball)),
+        None,
+    )
+    if not expected:
+        err(f"No checksum entry for {tarball}")
+        return
+    actual = _sha256_of(dest)
+    if actual != expected:
+        err(f"Pulumi SHA256 mismatch: expected {expected}, got {actual}")
+        return
+    print("  SHA256 OK")
+
+    install_dir = "/opt/pulumi"
+    print(f"  Extracting Pulumi to /opt ...")
+    run(["mkdir", "-p", "/opt"], as_sudo=True, check=False)
+    run(["rm", "-rf", install_dir], as_sudo=True)
+    run(["tar", "-C", "/opt", "-xzf", str(dest)], as_sudo=True)
+
+    _append_profile_line("pulumi", f'export PATH="$PATH:{install_dir}"')
+    print(f"  Pulumi {version} installed to {install_dir}")
+
+
 def _install_pipx(_tmp: Path) -> None:
     if not has_cmd("python3"):
         err("Python 3 is not installed — cannot install pipx")
@@ -862,6 +883,8 @@ def install_special_pkg(pkg: str, tmp: Path) -> None:
         _install_minikube(tmp)
     elif pkg == "bashtop":
         _install_bashtop(tmp)
+    elif pkg == "pulumi":
+        _install_pulumi(tmp)
     elif pkg == "pipx":
         _install_pipx(tmp)
     elif pkg == "poetry":
