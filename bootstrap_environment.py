@@ -1290,28 +1290,38 @@ def _clone_nvim_config() -> None:
     print(f"\n[Neovim] Setting up configuration from {repo_url} ...")
 
     if config_dir.exists():
-        print(f"  Removing existing configuration at {config_dir} ...")
-        shutil.rmtree(config_dir)
+        if (config_dir / ".git").is_dir():
+            remote = subprocess.run(
+                ["git", "-C", str(config_dir), "remote", "get-url", "origin"],
+                capture_output=True, text=True, check=False,
+            )
+            current = remote.stdout.strip()
+            if remote.returncode == 0 and current == repo_url:
+                print(f"  Configuration already cloned at {config_dir} — skipping.")
+                return
+            warn(f"{config_dir} has a different git remote ({current!r}); "
+                 f"leaving it untouched. Remove it manually to re-clone.")
+            return
+        warn(f"{config_dir} exists but is not a git repo; leaving it untouched. "
+             f"Remove it manually to clone the Neovim configuration.")
+        return
 
     config_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"  Cloning to {config_dir} ...")
-    # We use a temp clone and then move to ensure we handle the "rename" part of the request
-    # although cloning directly to 'nvim' is effectively the same.
-    # The user asked: "clones my nvim config to $HOME/.config/$REPO and renames the repo root folder to just nvim"
-    repo_name = repo_url.split("/")[-1].replace(".git", "")
+    repo_name = repo_url.split("/")[-1].removesuffix(".git")
     temp_clone = config_dir.parent / repo_name
-
     if temp_clone.exists():
         shutil.rmtree(temp_clone)
 
+    print(f"  Cloning to {config_dir} ...")
     result = run(["git", "clone", repo_url, str(temp_clone)], check=False)
     if result.returncode != 0:
         err("Neovim configuration clone failed")
         return
 
-    print(f"  Renaming {temp_clone.name} to {config_dir.name} ...")
-    temp_clone.rename(config_dir)
+    if temp_clone != config_dir:
+        print(f"  Renaming {temp_clone.name} to {config_dir.name} ...")
+        temp_clone.rename(config_dir)
     print(f"  Neovim configuration ready at {config_dir}")
 
 
