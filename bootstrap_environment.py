@@ -1005,7 +1005,7 @@ _DEFAULT_INSTALL_PATHS: dict[str, Path] = {
     "zig":         Path("/usr/local/bin/zig"),
     "nvm":         Path("~/.nvm"),
     "pyenv":       Path("~/.pyenv"),
-    "neovim":      Path(f"/opt/nvim-{_OS_NVIM[OS]}-{_ARCH_NVIM[ARCH]}"),
+    "neovim":      Path("/usr/local/bin/nvim"),
     "oh-my-zsh":   Path("~/.oh-my-zsh"),
 }
 
@@ -1273,8 +1273,14 @@ def _install_neovim(pkg: CustomPackage, tmp: Path) -> None:
     run(["rm", "-rf", install_dir], as_sudo=True)
     run(["tar", "-C", "/opt", "-xzf", str(dest)], as_sudo=True)
 
-    _append_profile_line("neovim", f'export PATH="$PATH:{install_dir}/bin"')
-    print(f"  Neovim installed to {install_dir}")
+    # Symlink into /usr/local/bin so `nvim` is on PATH for every shell type
+    # (login, interactive, scripts) without relying on /etc/profile.d, which
+    # is only sourced by login shells — terminal emulators typically launch
+    # non-login interactive shells.
+    run(["mkdir", "-p", "/usr/local/bin"], as_sudo=True, check=False)
+    symlink = "/usr/local/bin/nvim"
+    run(["ln", "-sf", f"{install_dir}/bin/nvim", symlink], as_sudo=True)
+    print(f"  Neovim installed to {install_dir}, symlinked at {symlink}")
 
 
 def _clone_nvim_config() -> None:
