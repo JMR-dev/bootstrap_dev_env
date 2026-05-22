@@ -1,0 +1,187 @@
+// bootstrap_environment ports the Python bootstrap script to Go.
+//
+// Sections handled:
+//
+//	System Packages  — installed via dnf, apt-get, pacman, or brew (macOS)
+//	Flatpak Packages — installed via flatpak from Flathub (Linux only;
+//	                   skipped by default and skipped entirely on macOS; use --gui)
+//	Custom Packages  — downloaded, verified, extracted
+//	macOS firecracker VM — provisions a Fedora cloud image under a hypervisor
+//	                   that supports nested virtualization. Suppress with --no-vm.
+//
+// OS detection is automatic. On macOS the first actions are to install the
+// Xcode Command Line Tools and Homebrew, which is then used as the system
+// package manager.
+//
+// Usage:
+//
+//	Linux:  sudo bootstrap_environment [--only system|flatpak|custom] [--gui]
+//	macOS:       bootstrap_environment [--only system|custom] [--gui] [--no-vm]
+//	             (do NOT use sudo on macOS — Homebrew refuses to run as root)
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+func main() {
+	only := flag.String("only", "", "Install only the named section (system|flatpak|custom)")
+	gui := flag.Bool("gui", false, "Include GUI applications (headed environments).")
+	noVM := flag.Bool("no-vm", false, "macOS only: skip provisioning the Fedora-on-QEMU VM that backs the firecracker() zsh wrapper.")
+	flag.Parse()
+
+	switch *only {
+	case "", "system", "flatpak", "custom":
+	default:
+		fmt.Fprintf(os.Stderr, "invalid --only value %q (use system|flatpak|custom)\n", *only)
+		os.Exit(2)
+	}
+
+	initPkgMgr()
+
+	systemPkgs := append([]string(nil), SystemPackages...)
+	flatpakPkgs := append([]string(nil), FlatpakPackages...)
+	custom := customPackages()
+	customPtrs := make([]*CustomPackage, 0, len(custom))
+	for i := range custom {
+		// Drop firecracker on macOS — it's provisioned inside the Fedora VM
+		// (see setupFirecrackerVM), not on the host.
+		if isMacOS && strings.ToLower(custom[i].Name) == "firecracker" {
+			continue
+		}
+		customPtrs = append(customPtrs, &custom[i])
+	}
+
+	fmt.Printf("OS:              %s\n", osName)
+	fmt.Printf("Architecture:    %s\n", archName)
+	fmt.Printf("Package manager: %s\n", pkgMgr)
+	if !*gui {
+		fmt.Println("Mode:            headless (default) — skipping GUI apps and Flatpak")
+	}
+
+	if isMacOS {
+		// Refuse to run as root before doing anything (brew won't run as root).
+		checkSudo()
+		ensureXcodeCLT()
+		ensureHomebrew()
+	}
+
+	fmt.Println("Checking installed packages ...")
+
+	if !*gui {
+		var skippedGUI, kept []string
+		for _, p := range systemPkgs {
+			if guiSystemPkgs[p] {
+				skippedGUI = append(skippedGUI, p)
+			} else {
+				kept = append(kept, p)
+			}
+		}
+		systemPkgs = kept
+		if len(skippedGUI) > 0 {
+			fmt.Printf("  [HEADLESS] Skipping GUI system packages: %s\n", fmtList(skippedGUI, 6))
+		}
+		flatpakPkgs = nil
+	}
+
+	doFlatpak := (*only == "" || *only == "flatpak") && *gui && !isMacOS
+
+	var sysCheck systemCheckResult
+	var flatCheck flatpakCheckResult
+	var custCheck customCheckResult
+
+	if *only == "" || *only == "system" {
+		sysCheck = checkSystemPackages(systemPkgs)
+	}
+	if doFlatpak {
+		flatCheck = checkFlatpakPackages(flatpakPkgs)
+	}
+	if *only == "" || *only == "custom" {
+		custCheck = checkCustomPackages(customPtrs)
+	}
+
+	total := printCheckSummary(sysCheck, flatCheck, custCheck, *only)
+
+	if total == 0 {
+		fmt.Println("\nAll packages already installed.")
+		writeRunLog()
+		return
+	}
+
+	if !askYN(fmt.Sprintf("\n%d item(s) to install. Proceed? [y/N] ", total)) {
+		fmt.Fprintln(os.Stderr, "Aborted.")
+		os.Exit(1)
+	}
+
+	checkSudo()
+
+	if *only == "" || *only == "system" {
+		installSystemPackages(sysCheck.toInstallRegular, sysCheck.toInstallSpecial)
+		ensureZshDefault()
+	}
+
+	if doFlatpak {
+		installFlatpakPackages(flatCheck.toInstall)
+	}
+
+	var pyenvWG interface{ Wait() }
+	if *only == "" || *only == "custom" {
+		installCustomPackages(custCheck.toInstall)
+		ensureNodeLTS()
+		if wg := ensurePythonLatest(); wg != nil {
+			pyenvWG = wg
+		}
+	}
+
+	if *only == "" {
+		checkAndSetupSSH()
+		cloneNvimConfig()
+		if isMacOS && !*noVM {
+			setupFirecrackerVM()
+		}
+	}
+
+	if pyenvWG != nil {
+		fmt.Println("\n[pyenv] Waiting for background Python install to finish ...")
+		pyenvWG.Wait()
+	}
+
+	writeRunLog()
+	printNotices()
+	fmt.Println("\nDone.")
+
+	home, _ := os.UserHomeDir()
+	zshrc := filepath.Join(home, ".zshrc")
+	if hasCmd("zsh") {
+		if _, err := os.Stat(zshrc); err == nil {
+			fmt.Println("\nSourcing ~/.zshrc ...")
+			runShell(fmt.Sprintf("zsh -c 'source %s'", zshrc), CmdOpts{})
+		}
+	}
+}
+
+func checkSudo() {
+	if os.Geteuid() == 0 {
+		if isMacOS {
+			fmt.Fprintln(os.Stderr, "Do not run this with sudo on macOS — Homebrew refuses to run as root. "+
+				"Re-run as your regular user; the tool will request sudo for the operations that need it.")
+			os.Exit(1)
+		}
+		return
+	}
+	if !hasCmd("sudo") {
+		fmt.Fprintln(os.Stderr, "sudo is required but not installed.")
+		os.Exit(1)
+	}
+	fmt.Println("Validating sudo access ...")
+	r := runCmd([]string{"sudo", "-v"}, CmdOpts{Timeout: 2 * time.Minute})
+	if r.ExitCode != 0 {
+		fmt.Fprintln(os.Stderr, "sudo authentication failed.")
+		os.Exit(1)
+	}
+}
