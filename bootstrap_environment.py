@@ -1071,6 +1071,37 @@ def _default_install_path(pkg: CustomPackage) -> Optional[Path]:
     return _DEFAULT_INSTALL_PATHS.get(pkg.name.lower())
 
 
+def _python3_decimal_ok() -> bool:
+    """Return True if Python 3's _decimal C extension loads without error."""
+    if not has_cmd("python3"):
+        return False
+    try:
+        r = subprocess.run(
+            ["python3", "-c", "from decimal import Decimal"],
+            capture_output=True, check=False, timeout=10,
+        )
+        return r.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def _fix_python3_decimal() -> bool:
+    """Install missing Python C-extension packages to fix a broken _decimal import.
+
+    On Debian/Ubuntu, python3.X ships without its C extensions when only the
+    base package is installed; python3-full (or the versioned equivalent) pulls
+    in _decimal, _hashlib, etc.  On RPM distros python3-libs covers this.
+    Returns True if the extension works after the attempt.
+    """
+    if PKG_MGR == "apt-get":
+        # python3-full is the meta-package that pulls in all C extensions for
+        # the default python3 on Debian/Ubuntu (including _decimal via libmpdec).
+        run(["apt-get", "install", "-y", "python3-full"], as_sudo=True, check=False)
+    elif PKG_MGR == "dnf":
+        run(["dnf", "install", "-y", "python3-libs"], as_sudo=True, check=False)
+    return _python3_decimal_ok()
+
+
 def _pip_installed() -> bool:
     if not has_cmd("python3"):
         return False
@@ -1210,6 +1241,22 @@ def _install_pip() -> None:
     if not has_cmd("python3"):
         err("python3 is not installed — cannot install pip")
         return
+
+    # Guard against a broken _decimal C extension (e.g. Python 3.13 on Ubuntu/Debian
+    # when python3-full is not installed).  Any pip invocation will immediately crash
+    # with RuntimeError if this module is missing, so fix it before proceeding.
+    if not _python3_decimal_ok():
+        warn("Python 3 _decimal C extension failed to import — attempting fix ...")
+        if _fix_python3_decimal():
+            print("  Python 3 _decimal extension restored.")
+        else:
+            err(
+                "Python 3 _decimal C extension could not be fixed. "
+                "Run: sudo apt-get install python3-full  (Debian/Ubuntu) "
+                "or: sudo dnf install python3-libs  (Fedora/RHEL)"
+            )
+            return
+
     print("  Bootstrapping pip via 'python3 -m ensurepip --upgrade' ...")
     bootstrap = run(
         ["python3", "-m", "ensurepip", "--upgrade"],
