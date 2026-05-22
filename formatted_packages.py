@@ -94,7 +94,12 @@ CUSTOM_PACKAGES: list[dict] = [
         "name": "go",
         "version": "1.26.3",
         "url_template": "https://go.dev/dl/go{version}.{os_go}-{arch_go}.tar.gz",
-        "sha256": "2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556",
+        "sha256_map": {
+            "linux-x86_64":  "2b2cfc7148493da5e73981bffbf3353af381d5f93e789c82c79aff64962eb556",
+            "linux-aarch64": "9d89a3ea57d141c2b22d70083f2c8459ba3890f2d9e818e7e933b75614936565",
+            "macos-x86_64":  "278d580b32e299fe4a9c990fcf2d02acfe538c7e551a6ee18f9c7164573d2c63",
+            "macos-aarch64": "875cf54a15311eee2c99b9dd67c68c4a49351d489ab622bf2cfd28c8f2078d3c",
+        },
         "fetch_latest": "go",
     },
     {"name": "neovim"},
@@ -105,7 +110,10 @@ CUSTOM_PACKAGES: list[dict] = [
             "https://github.com/firecracker-microvm/firecracker/releases/download/"
             "v{version}/firecracker-v{version}-{arch}.tgz"
         ),
-        "sha256": "d4a32ab2322d887ca1bc4a4e7afa9cc35393e6362dfc2b3becb389d362e4275a",
+        "sha256_map": {
+            "linux-x86_64":  "d4a32ab2322d887ca1bc4a4e7afa9cc35393e6362dfc2b3becb389d362e4275a",
+            "linux-aarch64": "00654ac1e702a22744121ea9f10a4f792ebd7c3a744cba587dfac9fcb79b41a5",
+        },
         "fetch_latest": "firecracker",
     },
     {

@@ -47,7 +47,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import formatted_packages
 
@@ -890,7 +890,8 @@ class CustomPackage:
     name: str
     version: Optional[str] = None              # pinned fallback version
     url_template: Optional[str] = None         # uses {version}, {arch}, {arch_go}
-    sha256: Optional[str] = None               # hex digest of the pinned archive
+    sha256: Optional[str] = None               # single-arch hex digest (set by _resolve_latest)
+    sha256_map: Optional[dict] = None          # per-platform pinned digests: {"os-arch": hex}
     sha256_url_template: Optional[str] = None  # template for a .minisig URL
     minisign_key: Optional[str] = None         # base64 public key for minisign verification
     fetch_latest: Optional[str] = None         # latest-version resolver hint
@@ -906,6 +907,22 @@ class CustomPackage:
             _url_format(self.sha256_url_template, self.version)
             if self.sha256_url_template else None
         )
+
+    @property
+    def resolved_sha256(self) -> Optional[str]:
+        """Return the SHA256 hex for the current OS+arch, lowercased.
+
+        sha256 (set dynamically by _resolve_latest) takes priority over sha256_map
+        so that a freshly fetched checksum always wins over the pinned fallback.
+        """
+        if self.sha256:
+            return self.sha256.lower()
+        if self.sha256_map:
+            key = f"{OS}-{ARCH}"
+            val = self.sha256_map.get(key)
+            if val:
+                return val.lower()
+        return None
 
     @property
     def display_name(self) -> str:
@@ -974,10 +991,11 @@ def _sha256_of(path: Path) -> str:
 
 def _verify(archive: Path, pkg: CustomPackage) -> bool:
     """Returns True if verification passed (or nothing to verify), False on failure."""
-    if pkg.sha256:
+    expected = pkg.resolved_sha256
+    if expected:
         actual = _sha256_of(archive)
-        if actual != pkg.sha256:
-            err(f"SHA256 mismatch for {pkg.name}: expected {pkg.sha256}, got {actual}")
+        if actual != expected:
+            err(f"SHA256 mismatch for {pkg.name}: expected {expected}, got {actual}")
             return False
         print("  SHA256 OK")
     elif pkg.sha256_url:
@@ -1469,7 +1487,7 @@ def _resolve_latest(pkg: CustomPackage) -> None:
         return
     print(f"  Latest is {latest_version} (pinned was {pkg.version}); using latest.")
     pkg.version = latest_version
-    pkg.sha256 = latest_sha
+    pkg.sha256 = latest_sha.lower()
     pkg.sha256_url_template = None  # prefer the freshly resolved sha256
 
 
@@ -1482,6 +1500,11 @@ def install_custom_packages(to_install: list[CustomPackage]) -> None:
               + (f" (install path: {check_path})" if check_path else ""))
         if check_path is None and name_lower != "pip":
             warn(f"{pkg.name}: no known install path — script will not detect future installs")
+
+        # Packages that are OS-specific
+        if name_lower == "firecracker" and IS_MACOS:
+            warn(f"{pkg.name}: Linux-only — skipping on macOS")
+            continue
 
         # Handlers that manage their own download/install
         if name_lower == "nvm":
