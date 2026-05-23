@@ -8,19 +8,20 @@ Linux).
 
 ## Install
 
-Download the native binary for your platform from a release, or build from
-source:
+Download the pre-built binary for your platform and make it executable.
+
+Using **curl**:
 
 ```shell
-git clone https://github.com/JMR-dev/bootstrap_dev_env.git
-cd bootstrap_dev_env
-make build           # builds ./bootstrap_environment for the host
+curl -Lo bootstrap_environment "https://github.com/JMR-dev/bootstrap_dev_env/releases/latest/download/bootstrap_environment-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/; s/arm64/arm64/')"
+chmod +x bootstrap_environment
 ```
 
-To produce native binaries for all four supported targets at once:
+Using **wget**:
 
 ```shell
-make build-all       # writes dist/bootstrap_environment-{linux,darwin}-{amd64,arm64}
+wget -O bootstrap_environment "https://github.com/JMR-dev/bootstrap_dev_env/releases/latest/download/bootstrap_environment-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/; s/arm64/arm64/')"
+chmod +x bootstrap_environment
 ```
 
 ## Usage
@@ -42,3 +43,23 @@ Flags:
   that backs the `firecracker()` zsh wrapper.
 
 Package lists live in `packages.go`. Edit and rebuild.
+
+## Build from Source
+
+If you prefer to build the tool yourself, or if you are making custom modifications:
+
+1. Clone the repository:
+   ```shell
+   git clone https://github.com/JMR-dev/bootstrap_dev_env.git
+   cd bootstrap_dev_env
+   ```
+
+2. Build for the current host platform:
+   ```shell
+   make build           # builds ./bootstrap_environment for the host
+   ```
+
+To cross-compile binaries for all supported targets at once:
+```shell
+make build-all       # writes dist/bootstrap_environment-{linux,darwin}-{amd64,arm64}
+```
