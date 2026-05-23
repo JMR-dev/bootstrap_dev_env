@@ -199,6 +199,11 @@ func resolveSystemPkgs(names []string) ([]string, []string) {
 
 // isSystemPkgInstalled queries the host package manager.
 func isSystemPkgInstalled(pkg string) bool {
+	// If 'which $pkg' returns a value, the package's command is available, so skip it.
+	if r, ok := probe([]string{"which", pkg}, 0); ok && r.ExitCode == 0 {
+		return true
+	}
+
 	switch pkgMgr {
 	case "dnf":
 		r, ok := probe([]string{"rpm", "-q", pkg}, 0)
