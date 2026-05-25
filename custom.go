@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -54,6 +55,7 @@ var defaultInstallPaths = map[string]string{
 	"pyenv":       "~/.pyenv",
 	"neovim":      "/usr/local/bin/nvim",
 	"oh-my-zsh":   "~/.oh-my-zsh",
+	"agy":         "~/.local/bin/agy",
 }
 
 func expandHome(p string) string {
@@ -84,9 +86,41 @@ func pipInstalled() bool {
 // isCustomPkgInstalled returns (installed, checkPath). pip ships inside the
 // Python distribution rather than at a fixed path, so it's detected with
 // `python3 -m pip --version`.
+func npmInstalled(cmdName string) (bool, string) {
+	if hasCmd(cmdName) {
+		if p, err := exec.LookPath(cmdName); err == nil {
+			return true, p
+		}
+		return true, ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, ""
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, ".local/share/pnpm/bin", cmdName))
+	if len(matches) > 0 {
+		return true, matches[0]
+	}
+	matches, _ = filepath.Glob(filepath.Join(home, ".nvm/versions/node/*/bin", cmdName))
+	if len(matches) > 0 {
+		return true, matches[0]
+	}
+	return false, ""
+}
+
 func isCustomPkgInstalled(pkg *CustomPackage) (bool, string) {
-	if strings.ToLower(pkg.Name) == "pip" {
+	name := strings.ToLower(pkg.Name)
+	if name == "pip" {
 		return pipInstalled(), ""
+	}
+	if name == "claude" {
+		return npmInstalled("claude")
+	}
+	if name == "codex" {
+		return npmInstalled("codex")
+	}
+	if name == "copilot" {
+		return npmInstalled("copilot")
 	}
 	raw := pkg.InstallPath
 	if raw == "" {
@@ -428,6 +462,7 @@ func resolveLatest(pkg *CustomPackage) {
 
 func installCustomPackages(toInstall []*CustomPackage) {
 	fmt.Println("\n=== Custom Packages ===")
+	ensureNodeLTS()
 	for _, pkg := range toInstall {
 		name := strings.ToLower(pkg.Name)
 		_, checkPath := isCustomPkgInstalled(pkg)
@@ -448,6 +483,7 @@ func installCustomPackages(toInstall []*CustomPackage) {
 		switch name {
 		case "nvm":
 			installNVM()
+			ensureNodeLTS()
 			continue
 		case "pyenv":
 			installPyenv()
@@ -466,6 +502,18 @@ func installCustomPackages(toInstall []*CustomPackage) {
 			}
 			installNeovim(pkg, tmp)
 			os.RemoveAll(tmp)
+			continue
+		case "agy":
+			installAgy()
+			continue
+		case "claude":
+			installNpmPackage("@anthropic-ai/claude-code")
+			continue
+		case "codex":
+			installNpmPackage("@openai/codex")
+			continue
+		case "copilot":
+			installNpmPackage("@github/copilot")
 			continue
 		}
 

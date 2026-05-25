@@ -243,6 +243,11 @@ func ensureNodeLTS() {
 	if !runShell(`bash -c "source ~/.nvm/nvm.sh && nvm alias default 'lts/*' && nvm use --lts"`, CmdOpts{}).OK() {
 		errLog("Setting nvm default to LTS failed")
 	}
+
+	fmt.Println("[NVM] Enabling corepack and installing latest pnpm ...")
+	if !runShell(`bash -c 'source ~/.nvm/nvm.sh && corepack enable && corepack prepare pnpm@latest --activate && pnpm config set global-bin-dir "$HOME/.local/share/pnpm/bin"'`, CmdOpts{}).OK() {
+		errLog("Failed to enable corepack and prepare pnpm")
+	}
 }
 
 // ── oh-my-zsh ───────────────────────────────────────────────────────────
@@ -455,3 +460,24 @@ func askYN(prompt string) bool {
 	answer := strings.ToLower(strings.TrimSpace(string(buf[:n])))
 	return answer == "y"
 }
+
+func installAgy() {
+	fmt.Println("  Installing agy via curl ...")
+	if !runShell("curl -fsSL https://antigravity.google/cli/install.sh | bash", CmdOpts{}).OK() {
+		errLog("agy installation failed")
+	}
+}
+
+func installNpmPackage(pkgName string) {
+	home, _ := os.UserHomeDir()
+	if _, err := os.Stat(filepath.Join(home, ".nvm")); err != nil {
+		errLog("NVM is not installed — cannot install " + pkgName)
+		return
+	}
+	ensureNodeLTS()
+	fmt.Printf("  Installing %s via pnpm ...\n", pkgName)
+	if !runShell(fmt.Sprintf(`bash -c "source ~/.nvm/nvm.sh && pnpm add -g %s"`, pkgName), CmdOpts{}).OK() {
+		errLog(fmt.Sprintf("%s installation failed", pkgName))
+	}
+}
+

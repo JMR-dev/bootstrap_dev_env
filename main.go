@@ -33,6 +33,7 @@ func main() {
 	only := flag.String("only", "", "Install only the named section (system|flatpak|custom)")
 	gui := flag.Bool("gui", false, "Include GUI applications (headed environments).")
 	noVM := flag.Bool("no-vm", false, "macOS only: skip provisioning the Fedora-on-QEMU VM that backs the firecracker() zsh wrapper.")
+	noAI := flag.Bool("no-ai", false, "Skip installation of LLM/AI CLI tools (agy, claude, codex, copilot).")
 	flag.Parse()
 
 	switch *only {
@@ -53,6 +54,12 @@ func main() {
 		// (see setupFirecrackerVM), not on the host.
 		if isMacOS && strings.ToLower(custom[i].Name) == "firecracker" {
 			continue
+		}
+		if *noAI {
+			name := strings.ToLower(custom[i].Name)
+			if name == "agy" || name == "claude" || name == "codex" || name == "copilot" {
+				continue
+			}
 		}
 		customPtrs = append(customPtrs, &custom[i])
 	}
