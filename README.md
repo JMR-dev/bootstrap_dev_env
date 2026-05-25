@@ -4,7 +4,7 @@ A Go-based bootstrap tool that installs a development environment across
 macOS, Debian/Ubuntu, RHEL/Fedora, and Arch Linux on `x86_64` and `aarch64`.
 It installs system packages, optional Flatpak GUI apps, and a set of custom
 third-party tools (Go, Neovim, Zig, NVM, pyenv, oh-my-zsh, Firecracker on
-Linux).
+Linux, agy, claude, codex, and copilot).
 
 ## Install
 
@@ -40,5 +40,6 @@ Flags:
   headless: both are skipped.
 - `--no-vm` — macOS only: skip provisioning the Fedora-on-QEMU/VirtualBox VM
   that backs the `firecracker()` zsh wrapper.
+- `--no-ai` — skip installation of AI/LLM CLI tools (agy, claude, codex, copilot).
 
 Package lists live in `packages.go`. Edit and rebuild.

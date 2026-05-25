@@ -136,5 +136,9 @@ func customPackages() []CustomPackage {
 		{Name: "pyenv"},
 		{Name: "pip"},
 		{Name: "oh-my-zsh"},
+		{Name: "agy"},
+		{Name: "claude"},
+		{Name: "codex"},
+		{Name: "copilot"},
 	}
 }
