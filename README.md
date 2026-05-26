@@ -1,15 +1,37 @@
 # bootstrap_dev_env
 
-A Go-based bootstrap tool that installs a development environment across
+A Go-based bootstrap tool that provisions a development environment across
 macOS, Debian/Ubuntu, RHEL/Fedora, and Arch Linux on `x86_64` and `aarch64`.
-It installs system packages, optional Flatpak GUI apps, and a set of custom
-third-party tools (Go, Neovim, Zig, NVM, pyenv, oh-my-zsh, Firecracker on
-Linux, agy, claude, codex, and copilot).
+
+It installs:
+
+- **System packages** via `dnf`, `apt-get`, `pacman`, or `brew` (macOS)
+- **Flatpak GUI apps** from Flathub (Linux only, opt-in with `--gui`)
+- **Custom third-party tools** fetched and verified directly:
+  Go, Neovim, Zig, Firecracker (Linux), NVM, pyenv, pip, oh-my-zsh,
+  agy, claude, codex, copilot, playwright, and the `gh-repo-bootstrap` extension
+
+## Supported platforms
+
+| OS | Architecture | Package manager |
+|---|---|---|
+| Linux (Debian/Ubuntu) | x86_64 | apt-get |
+| Linux (RHEL/Fedora) | x86_64 | dnf |
+| Linux (Arch) | x86_64 | pacman |
+| macOS | arm64 | brew |
+
+> **Note:** Linux arm64 (`aarch64`) binaries are cross-compiled but not yet tested in CI.
+
+## CI
+
+| Workflow | Trigger |
+|---|---|
+| **Unit Tests** — `go test -v ./...` + `go vet ./...` | Pull requests to `main` / `dev` |
+| **Integration Tests** — full run on Debian, Arch, Fedora (Dagger) and macOS (native) | Push + pull requests to `main` / `dev` |
 
 ## Install
 
-Download the native binary for your platform from a release, or build from
-source:
+Build from source:
 
 ```shell
 git clone https://github.com/JMR-dev/bootstrap_dev_env.git
@@ -17,29 +39,65 @@ cd bootstrap_dev_env
 make build           # builds ./bootstrap_environment for the host
 ```
 
-To produce native binaries for all four supported targets at once:
+Cross-compile all supported targets at once:
 
 ```shell
-make build-all       # writes dist/bootstrap_environment-{linux,darwin}-{amd64,arm64}
+make build-all       # writes dist/bootstrap_environment-{linux,darwin}-{amd64,arm64,...}
 ```
+
+Or download a pre-built binary from the [Releases](https://github.com/JMR-dev/bootstrap_dev_env/releases) page.
 
 ## Usage
 
 ```shell
 # Linux (do NOT use sudo on macOS — Homebrew refuses to run as root)
-sudo ./bootstrap_environment [--only system|flatpak|custom] [--gui]
+sudo ./bootstrap_environment [flags]
 
 # macOS
-./bootstrap_environment [--only system|custom] [--gui] [--no-vm]
+./bootstrap_environment [flags]
 ```
 
-Flags:
+### Flags
 
-- `--only` — restrict to one section (`system`, `flatpak`, or `custom`).
-- `--gui`  — include GUI applications and the Flatpak section. Default is
-  headless: both are skipped.
-- `--no-vm` — macOS only: skip provisioning the Fedora-on-QEMU/VirtualBox VM
-  that backs the `firecracker()` zsh wrapper.
-- `--no-ai` — skip installation of AI/LLM CLI tools (agy, claude, codex, copilot).
+| Flag | Description |
+|---|---|
+| `--only system\|flatpak\|custom` | Restrict to a single section |
+| `--gui` | Include GUI applications and the Flatpak section (default: headless — both skipped) |
+| `--no-vm` | macOS only: skip provisioning the Fedora-on-QEMU VM that backs the `firecracker()` zsh wrapper |
+| `--no-ai` | Skip AI/LLM CLI tools (agy, claude, codex, copilot) |
 
-Package lists live in `packages.go`. Edit and rebuild.
+### Example
+
+```shell
+# Full headless install (typical CI / server)
+sudo ./bootstrap_environment
+
+# Desktop workstation — include GUI apps and Flatpaks
+sudo ./bootstrap_environment --gui
+
+# Install only system packages, skipping AI tools
+sudo ./bootstrap_environment --only system --no-ai
+
+# macOS, no VM provisioning
+./bootstrap_environment --gui --no-vm
+```
+
+## Configuration
+
+Package lists live in `packages.go`. Edit the `SystemPackages`,
+`FlatpakPackages`, or `customPackages()` slices and rebuild.
+
+Platform-specific name mappings (e.g. `docker-ce-rootless-extras` →
+skipped on Arch, `ffmpeg-free` → `ffmpeg` on apt-get) live in the
+`packageOverrides` map in `pkgmgr.go`. Third-party repository setup
+(Docker, GitHub CLI, Temurin, lazygit COPR, etc.) lives in `repos.go`.
+
+## Development
+
+```shell
+make test    # go test ./...
+make vet     # go vet ./...
+make fmt     # gofmt -w .
+make build   # build host binary
+```
+
