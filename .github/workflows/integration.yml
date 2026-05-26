@@ -53,6 +53,9 @@ jobs:
           mkdir -p ~/.pyenv
 
       - name: Run bootstrap tool
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo y | ./bootstrap_environment --only custom --no-vm --no-ai
 
