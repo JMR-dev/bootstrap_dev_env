@@ -350,13 +350,20 @@ func TestEnsurePythonAndNode(t *testing.T) {
 	}
 	ensureNodeLTS()
 	hasInstall := false
+	hasPnpmSetup := false
 	for _, cmd := range runShellCmds {
 		if strings.Contains(cmd, "nvm install --lts") {
 			hasInstall = true
 		}
+		if strings.Contains(cmd, "pnpm setup") {
+			hasPnpmSetup = true
+		}
 	}
 	if !hasInstall {
 		t.Errorf("expected nvm install --lts, got: %v", runShellCmds)
+	}
+	if !hasPnpmSetup {
+		t.Errorf("expected pnpm setup, got: %v", runShellCmds)
 	}
 }
 

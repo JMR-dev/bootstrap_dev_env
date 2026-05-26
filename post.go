@@ -245,8 +245,13 @@ func ensureNodeLTS() {
 	}
 
 	fmt.Println("[NVM] Enabling corepack and installing latest pnpm ...")
-	if !runShell(`bash -c 'source ~/.nvm/nvm.sh && corepack enable && corepack prepare pnpm@latest --activate && pnpm config set global-bin-dir "$HOME/.local/share/pnpm/bin"'`, CmdOpts{}).OK() {
+	if !runShell(`bash -c 'source ~/.nvm/nvm.sh && corepack enable && corepack prepare pnpm@latest --activate'`, CmdOpts{}).OK() {
 		errLog("Failed to enable corepack and prepare pnpm")
+		return
+	}
+	fmt.Println("[pnpm] Running pnpm setup to configure PATH ...")
+	if !runShell(`bash -c 'source ~/.nvm/nvm.sh && pnpm setup'`, CmdOpts{}).OK() {
+		errLog("pnpm setup failed")
 	}
 }
 
@@ -489,16 +494,12 @@ func installPlaywright() {
 	}
 	ensureNodeLTS()
 	fmt.Println("  Installing playwright via pnpm ...")
-	if !runShell(`bash -c "source ~/.nvm/nvm.sh && pnpm add -g playwright"`, CmdOpts{}).OK() {
+	if !runShell(`bash -c "source ~/.nvm/nvm.sh && source ~/.bashrc 2>/dev/null; pnpm add -g playwright"`, CmdOpts{}).OK() {
 		errLog("playwright installation failed")
 		return
 	}
-	pnpmBin := filepath.Join(home, ".local/share/pnpm/bin")
-	if !strings.Contains(os.Getenv("PATH"), pnpmBin) {
-		appendProfileLine("pnpm", `export PATH="$HOME/.local/share/pnpm/bin:$PATH"`)
-	}
 	fmt.Println("  Installing Playwright browsers with dependencies ...")
-	if !runShell(fmt.Sprintf(`bash -c "source ~/.nvm/nvm.sh && PATH=%s:$PATH pnpx playwright install --with-deps"`, pnpmBin), CmdOpts{}).OK() {
+	if !runShell(`bash -c "source ~/.nvm/nvm.sh && source ~/.bashrc 2>/dev/null; pnpx playwright install --with-deps"`, CmdOpts{}).OK() {
 		errLog("playwright browser installation failed")
 	}
 }
