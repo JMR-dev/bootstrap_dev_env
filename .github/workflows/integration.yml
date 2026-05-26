@@ -59,7 +59,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo y | ./bootstrap_environment
+          echo y | ./bootstrap_environment --gui
 
   conclusion:
     name: Final Status Check

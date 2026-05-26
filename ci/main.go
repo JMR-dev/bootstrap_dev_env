@@ -99,7 +99,7 @@ func main() {
 			// 4. Run bootstrap binary against the full package set (no scope flags).
 			// We pipe 'y' to satisfy the "Proceed? [y/N]" prompt.
 			fmt.Printf("[%s] Executing bootstrap_environment...\n", target)
-			testContainer = testContainer.WithExec([]string{"sh", "-c", "echo y | bootstrap_environment"})
+			testContainer = testContainer.WithExec([]string{"sh", "-c", "echo y | bootstrap_environment --gui"})
 
 			// 5. Verify all installed custom packages return a path and zero exit code from version command
 			fmt.Printf("[%s] Verifying package installations on PATH and running version checks...\n", target)
