@@ -481,3 +481,36 @@ func installNpmPackage(pkgName string) {
 	}
 }
 
+func installPlaywright() {
+	home, _ := os.UserHomeDir()
+	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
+		errLog("NVM is not installed — cannot install playwright")
+		return
+	}
+	ensureNodeLTS()
+	fmt.Println("  Installing playwright via pnpm ...")
+	if !runShell(`bash -c "source ~/.nvm/nvm.sh && pnpm add -g playwright"`, CmdOpts{}).OK() {
+		errLog("playwright installation failed")
+		return
+	}
+	pnpmBin := filepath.Join(home, ".local/share/pnpm/bin")
+	if !strings.Contains(os.Getenv("PATH"), pnpmBin) {
+		appendProfileLine("pnpm", `export PATH="$HOME/.local/share/pnpm/bin:$PATH"`)
+	}
+	fmt.Println("  Installing Playwright browsers with dependencies ...")
+	if !runShell(fmt.Sprintf(`bash -c "source ~/.nvm/nvm.sh && PATH=%s:$PATH pnpx playwright install --with-deps"`, pnpmBin), CmdOpts{}).OK() {
+		errLog("playwright browser installation failed")
+	}
+}
+
+func installGHExtension(repo string) {
+	if !hasCmd("gh") {
+		errLog("gh CLI is not installed — cannot install extension " + repo)
+		return
+	}
+	fmt.Printf("  Installing gh extension %s ...\n", repo)
+	if !runCmd([]string{"gh", "extension", "install", repo}, CmdOpts{}).OK() {
+		errLog(fmt.Sprintf("gh extension install %s failed", repo))
+	}
+}
+

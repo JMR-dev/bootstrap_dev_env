@@ -398,3 +398,4 @@ func TestResolveLatestEdgeCases(t *testing.T) {
 	resolveLatest(pkgSame)
 }
 
+

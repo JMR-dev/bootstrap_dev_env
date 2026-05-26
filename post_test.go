@@ -465,6 +465,9 @@ func TestEnsureZshDefaultEdgeCases(t *testing.T) {
 		}
 		return CmdResult{ExitCode: 0, Stdout: []byte("")}, true
 	}
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		return CmdResult{ExitCode: 0}
+	}
 	passwdPath = filepath.Join(t.TempDir(), "passwd")
 	ensureZshDefault()
 
@@ -590,6 +593,39 @@ func (e *errReader) Read(p []byte) (n int, err error) {
 	return 0, fmt.Errorf("simulated read error")
 }
 
+func TestInstallGHExtension(t *testing.T) {
+	defer resetMocks()
+
+	// gh not installed
+	hasCmd = func(name string) bool { return false }
+	installGHExtension("JMR-dev/gh-repo-bootstrap") // should log error and return
+
+	// gh installed, install succeeds
+	resetMocks()
+	hasCmd = func(name string) bool { return true }
+	var runCmdCalls [][]string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdCalls = append(runCmdCalls, argv)
+		return CmdResult{ExitCode: 0}
+	}
+	installGHExtension("JMR-dev/gh-repo-bootstrap")
+	if len(runCmdCalls) != 1 ||
+		runCmdCalls[0][0] != "gh" ||
+		runCmdCalls[0][1] != "extension" ||
+		runCmdCalls[0][2] != "install" ||
+		runCmdCalls[0][3] != "JMR-dev/gh-repo-bootstrap" {
+		t.Errorf("expected gh extension install command, got: %v", runCmdCalls)
+	}
+
+	// gh installed, install fails
+	resetMocks()
+	hasCmd = func(name string) bool { return true }
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		return CmdResult{ExitCode: 1}
+	}
+	installGHExtension("JMR-dev/gh-repo-bootstrap") // should log error
+}
+
 func TestInstallNpmPackageEdgeCases(t *testing.T) {
 	defer resetMocks()
 
@@ -597,6 +633,64 @@ func TestInstallNpmPackageEdgeCases(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 	installNpmPackage("test-pkg")
+}
+
+func TestInstallPlaywright(t *testing.T) {
+	defer resetMocks()
+
+	// Edge case: NVM not installed
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+	installPlaywright() // should log error and return
+
+	// Happy path
+	resetMocks()
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil // nvm exists
+	}
+	var runShellCmds []string
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		runShellCmds = append(runShellCmds, cmd)
+		return CmdResult{ExitCode: 0}
+	}
+	installPlaywright()
+	hasPnpmInstall := false
+	hasPlaywrightBrowsers := false
+	for _, cmd := range runShellCmds {
+		if strings.Contains(cmd, "pnpm add -g playwright") {
+			hasPnpmInstall = true
+		}
+		if strings.Contains(cmd, "pnpx playwright install --with-deps") {
+			hasPlaywrightBrowsers = true
+		}
+	}
+	if !hasPnpmInstall {
+		t.Errorf("expected pnpm add -g playwright, got: %v", runShellCmds)
+	}
+	if !hasPlaywrightBrowsers {
+		t.Errorf("expected pnpx playwright install --with-deps, got: %v", runShellCmds)
+	}
+
+	// Failure path: pnpm install fails, browser install should be skipped
+	resetMocks()
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil
+	}
+	var failShellCmds []string
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		failShellCmds = append(failShellCmds, cmd)
+		if strings.Contains(cmd, "pnpm add -g playwright") {
+			return CmdResult{ExitCode: 1}
+		}
+		return CmdResult{ExitCode: 0}
+	}
+	installPlaywright()
+	for _, cmd := range failShellCmds {
+		if strings.Contains(cmd, "pnpx playwright install") {
+			t.Errorf("browser install should be skipped when pnpm install fails, got: %v", failShellCmds)
+		}
+	}
 }
 
 func TestEnsureNodeLTSEdgeCases(t *testing.T) {

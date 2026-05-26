@@ -15,8 +15,11 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+      tag: ${{ steps.ref.outputs.tag }}
     steps:
       - name: Resolve ref
         id: ref
@@ -29,10 +32,35 @@ jobs:
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
+  build:
+    name: Build ${{ matrix.suffix }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - goos: linux
+            goarch: arm
+            goarm: '6'
+            suffix: linux-armv6
+          - goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.ref.outputs.ref }}
+          ref: ${{ needs.resolve.outputs.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Go
@@ -41,12 +69,47 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
-      - name: Build all targets
-        run: make build-all
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          out="dist/bootstrap_environment-${{ matrix.suffix }}"
+          echo "==> Building $out (GOOS=$GOOS GOARCH=$GOARCH GOARM=${GOARM:-n/a})"
+          go build -trimpath -ldflags="-s -w" -o "$out" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap_environment-${{ matrix.suffix }}
+          path: dist/bootstrap_environment-${{ matrix.suffix }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: bootstrap_environment-*
+          merge-multiple: true
 
       - name: Generate SHA256SUMS
         working-directory: dist
         run: |
+          ls -l
           sha256sum bootstrap_environment-* > SHA256SUMS
           cat SHA256SUMS
 
@@ -54,8 +117,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ steps.ref.outputs.tag }}
-          name: ${{ steps.ref.outputs.tag }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          name: ${{ needs.resolve.outputs.tag }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           fail_on_unmatched_files: true
