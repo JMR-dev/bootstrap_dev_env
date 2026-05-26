@@ -250,7 +250,7 @@ func ensureNodeLTS() {
 		return
 	}
 	fmt.Println("[pnpm] Running pnpm setup to configure PATH ...")
-	if !runShell(`bash -c 'source ~/.nvm/nvm.sh && pnpm setup'`, CmdOpts{}).OK() {
+	if !runShell(`bash -c 'export SHELL=/bin/bash && source ~/.nvm/nvm.sh && pnpm setup'`, CmdOpts{}).OK() {
 		errLog("pnpm setup failed")
 	}
 }
