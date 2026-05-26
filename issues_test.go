@@ -12,32 +12,29 @@ func TestIssuesLogging(t *testing.T) {
 	defer resetMocks()
 	resetMocks()
 
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
+	// Capture issue log output via the injectable writer.
+	var buf bytes.Buffer
+	oldWriter := issueLogWriter
+	issueLogWriter = &buf
+	defer func() { issueLogWriter = oldWriter }()
 
 	warn("something is deprecated")
 	errLog("something failed")
 	notice("please restart shell")
 
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
 	output := buf.String()
 
 	if !strings.Contains(output, "[WARN] something is deprecated") {
-		t.Errorf("stdout missing warning: %q", output)
+		t.Errorf("output missing warning: %q", output)
 	}
 	if !strings.Contains(output, "[ERROR] something failed") {
-		t.Errorf("stdout missing error: %q", output)
+		t.Errorf("output missing error: %q", output)
 	}
 
 	issuesMu.Lock()
 	issueLen := len(issues)
 	noticeLen := len(notices)
+	errCount := errorCount
 	issuesMu.Unlock()
 
 	if issueLen != 2 {
@@ -45,6 +42,12 @@ func TestIssuesLogging(t *testing.T) {
 	}
 	if noticeLen != 1 {
 		t.Errorf("expected 1 notice, got %d", noticeLen)
+	}
+	if errCount != 1 {
+		t.Errorf("expected 1 error count, got %d", errCount)
+	}
+	if !hasErrors() {
+		t.Error("expected hasErrors() to return true after errLog call")
 	}
 }
 
@@ -80,6 +83,24 @@ func TestWriteRunLog(t *testing.T) {
 	}
 	if !strings.Contains(string(writtenData), "[WARN] test warning") {
 		t.Errorf("expected log to contain the warning, got: %s", string(writtenData))
+	}
+}
+
+func TestHasErrors(t *testing.T) {
+	defer resetMocks()
+
+	if hasErrors() {
+		t.Error("expected hasErrors() false with no errors logged")
+	}
+
+	warn("just a warning")
+	if hasErrors() {
+		t.Error("expected hasErrors() false after only a warning")
+	}
+
+	errLog("a real error")
+	if !hasErrors() {
+		t.Error("expected hasErrors() true after errLog call")
 	}
 }
 

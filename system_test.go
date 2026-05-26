@@ -191,6 +191,30 @@ func TestInstallObsidian(t *testing.T) {
 	if len(runCmdCalls) != 2 || runCmdCalls[0][0] != "cp" || runCmdCalls[1][0] != "chmod" {
 		t.Errorf("expected cp and chmod calls, got %v", runCmdCalls)
 	}
+
+	// Obsidian publishes the x86_64 AppImage without an arch token
+	// (e.g. "Obsidian-1.12.7.AppImage"). It should still match on x86_64.
+	fetchJSON = func(url string, v any) bool {
+		rel := v.(*ghRelease)
+		rel.Assets = []ghAsset{
+			{Name: "Obsidian-1.12.7-arm64.AppImage", BrowserDownloadURL: "http://obs-arm64"},
+			{Name: "Obsidian-1.12.7.AppImage", BrowserDownloadURL: "http://obs-default"},
+		}
+		return true
+	}
+	downloadedURL = ""
+	archName = "x86_64"
+	installObsidian("/tmp")
+	if downloadedURL != "http://obs-default" {
+		t.Errorf("expected token-less AppImage to be selected for x86_64, got %q", downloadedURL)
+	}
+
+	downloadedURL = ""
+	archName = "aarch64"
+	installObsidian("/tmp")
+	if downloadedURL != "http://obs-arm64" {
+		t.Errorf("expected arm64 AppImage for aarch64, got %q", downloadedURL)
+	}
 }
 
 func TestInstallMinikube(t *testing.T) {

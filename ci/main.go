@@ -88,10 +88,18 @@ func main() {
 				WithFile("/usr/local/bin/bootstrap_environment", binaryFile).
 				WithWorkdir("/tmp")
 
-			// 4. Run bootstrap binary with safe args: --only custom --no-vm --no-ai
+			// Forward GitHub token so API calls are authenticated (avoids 403 rate-limits)
+			if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+				secret := client.SetSecret("github-token", tok)
+				testContainer = testContainer.
+					WithSecretVariable("GITHUB_TOKEN", secret).
+					WithSecretVariable("GH_TOKEN", secret)
+			}
+
+			// 4. Run bootstrap binary against the full package set (no scope flags).
 			// We pipe 'y' to satisfy the "Proceed? [y/N]" prompt.
 			fmt.Printf("[%s] Executing bootstrap_environment...\n", target)
-			testContainer = testContainer.WithExec([]string{"sh", "-c", "echo y | bootstrap_environment --only custom --no-vm --no-ai"})
+			testContainer = testContainer.WithExec([]string{"sh", "-c", "echo y | bootstrap_environment --gui"})
 
 			// 5. Verify all installed custom packages return a path and zero exit code from version command
 			fmt.Printf("[%s] Verifying package installations on PATH and running version checks...\n", target)

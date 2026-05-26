@@ -170,18 +170,27 @@ func installObsidian(tmp string) {
 	hostTokens := archTokens[archName]
 	otherTokens := archTokens[otherArch()]
 
+	hasAnyToken := func(n string, tokens []string) bool {
+		for _, t := range tokens {
+			if strings.Contains(n, t) {
+				return true
+			}
+		}
+		return false
+	}
+
 	matches := func(name string) bool {
 		n := strings.ToLower(name)
 		if !strings.HasSuffix(n, ".appimage") {
 			return false
 		}
-		matched := false
-		for _, t := range hostTokens {
-			if strings.Contains(n, t) {
-				matched = true
-				break
-			}
+		// Obsidian publishes the x86_64 AppImage without an arch suffix
+		// (e.g. "Obsidian-1.12.7.AppImage") and the arm64 build as
+		// "Obsidian-1.12.7-arm64.AppImage". Treat a token-less AppImage as x86_64.
+		if !hasAnyToken(n, hostTokens) && !hasAnyToken(n, otherTokens) {
+			return archName == "x86_64"
 		}
+		matched := hasAnyToken(n, hostTokens)
 		if !matched {
 			return false
 		}

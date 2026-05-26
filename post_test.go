@@ -231,6 +231,63 @@ func TestCloneNvimConfig(t *testing.T) {
 	}
 }
 
+func TestCloneNvimConfigSSHFallback(t *testing.T) {
+	defer resetMocks()
+
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist // nothing exists
+	}
+
+	var runCmdCalls [][]string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdCalls = append(runCmdCalls, argv)
+		// First clone (SSH) fails; second (HTTPS) succeeds.
+		if len(runCmdCalls) == 1 {
+			return CmdResult{ExitCode: 1}
+		}
+		return CmdResult{ExitCode: 0}
+	}
+
+	cloneNvimConfig()
+
+	if len(runCmdCalls) != 2 {
+		t.Fatalf("expected 2 git clone attempts (SSH then HTTPS), got: %v", runCmdCalls)
+	}
+	if !strings.HasPrefix(runCmdCalls[0][2], "git@github.com:") {
+		t.Errorf("expected first attempt to use SSH URL, got: %v", runCmdCalls[0])
+	}
+	if !strings.HasPrefix(runCmdCalls[1][2], "https://github.com/") {
+		t.Errorf("expected fallback to use HTTPS URL, got: %v", runCmdCalls[1])
+	}
+	if hasErrors() {
+		t.Errorf("expected no errors logged when HTTPS fallback succeeds")
+	}
+}
+
+func TestCloneNvimConfigBothFail(t *testing.T) {
+	defer resetMocks()
+
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		return CmdResult{ExitCode: 1}
+	}
+
+	cloneNvimConfig()
+
+	if !hasErrors() {
+		t.Errorf("expected error logged when both SSH and HTTPS clones fail")
+	}
+}
+
 func TestCheckAndSetupSSH(t *testing.T) {
 	defer resetMocks()
 
@@ -304,6 +361,25 @@ func TestInstallPipAgyNpm(t *testing.T) {
 	if len(runShellCmds) < 1 || !strings.Contains(runShellCmds[len(runShellCmds)-1], "pnpm add -g my-package") {
 		t.Errorf("unexpected npm install command: %v", runShellCmds)
 	}
+	if !strings.Contains(runShellCmds[len(runShellCmds)-1], `PNPM_HOME=`) {
+		t.Errorf("expected PNPM_HOME export, got: %v", runShellCmds)
+	}
+
+	// macOS uses ~/Library/pnpm
+	resetMocks()
+	isMacOS = true
+	runShellCmds = nil
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		runShellCmds = append(runShellCmds, cmd)
+		return CmdResult{ExitCode: 0}
+	}
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil
+	}
+	installNpmPackage("my-package")
+	if len(runShellCmds) < 1 || !strings.Contains(runShellCmds[len(runShellCmds)-1], `Library/pnpm`) {
+		t.Errorf("expected macOS PNPM_HOME path, got: %v", runShellCmds)
+	}
 }
 
 func TestEnsurePythonAndNode(t *testing.T) {
@@ -350,13 +426,20 @@ func TestEnsurePythonAndNode(t *testing.T) {
 	}
 	ensureNodeLTS()
 	hasInstall := false
+	hasPnpmSetup := false
 	for _, cmd := range runShellCmds {
 		if strings.Contains(cmd, "nvm install --lts") {
 			hasInstall = true
 		}
+		if strings.Contains(cmd, "pnpm setup") {
+			hasPnpmSetup = true
+		}
 	}
 	if !hasInstall {
 		t.Errorf("expected nvm install --lts, got: %v", runShellCmds)
+	}
+	if !hasPnpmSetup {
+		t.Errorf("expected pnpm setup, got: %v", runShellCmds)
 	}
 }
 
@@ -464,6 +547,9 @@ func TestEnsureZshDefaultEdgeCases(t *testing.T) {
 			return CmdResult{ExitCode: 1}, true
 		}
 		return CmdResult{ExitCode: 0, Stdout: []byte("")}, true
+	}
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		return CmdResult{ExitCode: 0}
 	}
 	passwdPath = filepath.Join(t.TempDir(), "passwd")
 	ensureZshDefault()
@@ -590,6 +676,39 @@ func (e *errReader) Read(p []byte) (n int, err error) {
 	return 0, fmt.Errorf("simulated read error")
 }
 
+func TestInstallGHExtension(t *testing.T) {
+	defer resetMocks()
+
+	// gh not installed
+	hasCmd = func(name string) bool { return false }
+	installGHExtension("JMR-dev/gh-repo-bootstrap") // should log error and return
+
+	// gh installed, install succeeds
+	resetMocks()
+	hasCmd = func(name string) bool { return true }
+	var runCmdCalls [][]string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdCalls = append(runCmdCalls, argv)
+		return CmdResult{ExitCode: 0}
+	}
+	installGHExtension("JMR-dev/gh-repo-bootstrap")
+	if len(runCmdCalls) != 1 ||
+		runCmdCalls[0][0] != "gh" ||
+		runCmdCalls[0][1] != "extension" ||
+		runCmdCalls[0][2] != "install" ||
+		runCmdCalls[0][3] != "JMR-dev/gh-repo-bootstrap" {
+		t.Errorf("expected gh extension install command, got: %v", runCmdCalls)
+	}
+
+	// gh installed, install fails
+	resetMocks()
+	hasCmd = func(name string) bool { return true }
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		return CmdResult{ExitCode: 1}
+	}
+	installGHExtension("JMR-dev/gh-repo-bootstrap") // should log error
+}
+
 func TestInstallNpmPackageEdgeCases(t *testing.T) {
 	defer resetMocks()
 
@@ -597,6 +716,90 @@ func TestInstallNpmPackageEdgeCases(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 	installNpmPackage("test-pkg")
+}
+
+func TestInstallPlaywright(t *testing.T) {
+	defer resetMocks()
+
+	// Edge case: NVM not installed
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+	installPlaywright() // should log error and return
+
+	// Happy path on apt-get: should pass --with-deps
+	resetMocks()
+	pkgMgr = "apt-get"
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil // nvm exists
+	}
+	var runShellCmds []string
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		runShellCmds = append(runShellCmds, cmd)
+		return CmdResult{ExitCode: 0}
+	}
+	installPlaywright()
+	hasPnpmInstall := false
+	hasPlaywrightBrowsers := false
+	for _, cmd := range runShellCmds {
+		if strings.Contains(cmd, "pnpm add -g playwright") {
+			hasPnpmInstall = true
+		}
+		if strings.Contains(cmd, "pnpx playwright install --with-deps") {
+			hasPlaywrightBrowsers = true
+		}
+	}
+	if !hasPnpmInstall {
+		t.Errorf("expected pnpm add -g playwright, got: %v", runShellCmds)
+	}
+	if !hasPlaywrightBrowsers {
+		t.Errorf("expected pnpx playwright install --with-deps on apt-get, got: %v", runShellCmds)
+	}
+
+	// Happy path on non-apt (dnf/pacman/brew): must NOT pass --with-deps
+	resetMocks()
+	pkgMgr = "dnf"
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil
+	}
+	var dnfShellCmds []string
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		dnfShellCmds = append(dnfShellCmds, cmd)
+		return CmdResult{ExitCode: 0}
+	}
+	installPlaywright()
+	hasPlainBrowsers := false
+	for _, cmd := range dnfShellCmds {
+		if strings.Contains(cmd, "--with-deps") {
+			t.Errorf("did not expect --with-deps on dnf, got: %v", dnfShellCmds)
+		}
+		if strings.Contains(cmd, "pnpx playwright install") {
+			hasPlainBrowsers = true
+		}
+	}
+	if !hasPlainBrowsers {
+		t.Errorf("expected pnpx playwright install (without --with-deps) on dnf, got: %v", dnfShellCmds)
+	}
+
+	// Failure path: pnpm install fails, browser install should be skipped
+	resetMocks()
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil
+	}
+	var failShellCmds []string
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		failShellCmds = append(failShellCmds, cmd)
+		if strings.Contains(cmd, "pnpm add -g playwright") {
+			return CmdResult{ExitCode: 1}
+		}
+		return CmdResult{ExitCode: 0}
+	}
+	installPlaywright()
+	for _, cmd := range failShellCmds {
+		if strings.Contains(cmd, "pnpx playwright install") {
+			t.Errorf("browser install should be skipped when pnpm install fails, got: %v", failShellCmds)
+		}
+	}
 }
 
 func TestEnsureNodeLTSEdgeCases(t *testing.T) {

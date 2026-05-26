@@ -55,7 +55,8 @@ var defaultInstallPaths = map[string]string{
 	"pyenv":       "~/.pyenv",
 	"neovim":      "/usr/local/bin/nvim",
 	"oh-my-zsh":   "~/.oh-my-zsh",
-	"agy":         "~/.local/bin/agy",
+	"agy":               "~/.local/bin/agy",
+	"gh-repo-bootstrap": "~/.local/share/gh/extensions/gh-repo-bootstrap",
 }
 
 func expandHome(p string) string {
@@ -121,6 +122,9 @@ func isCustomPkgInstalled(pkg *CustomPackage) (bool, string) {
 	}
 	if name == "copilot" {
 		return npmInstalled("copilot")
+	}
+	if name == "playwright" {
+		return npmInstalled("playwright")
 	}
 	raw := pkg.InstallPath
 	if raw == "" {
@@ -518,6 +522,12 @@ func installCustomPackages(toInstall []*CustomPackage) {
 			continue
 		case "copilot":
 			installNpmPackage("@github/copilot")
+			continue
+		case "playwright":
+			installPlaywright()
+			continue
+		case "gh-repo-bootstrap":
+			installGHExtension("JMR-dev/gh-repo-bootstrap")
 			continue
 		}
 

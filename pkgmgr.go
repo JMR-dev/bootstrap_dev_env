@@ -105,7 +105,8 @@ var packageOverrides = map[string]map[string]overrideEntry{
 		"containerd.io":             replace("containerd"),
 		"docker-ce":                 replace("docker"),
 		"docker-ce-cli":             skipOverride(), // covered by docker
-		"docker-ce-rootless-extras": replace("docker-rootless-extras"),
+		"docker-ce-rootless-extras": skipOverride(), // AUR-only
+		"pipx":                      replace("python-pipx"),
 		"docker-buildx-plugin":      replace("docker-buildx"),
 		"docker-compose-plugin":     replace("docker-compose"),
 		"dotnet-sdk-10.0":           replace("dotnet-sdk"),
@@ -121,7 +122,7 @@ var packageOverrides = map[string]map[string]overrideEntry{
 		"rg":                        replace("ripgrep"),
 		"shutter":                   skipOverride(), // AUR-only
 		"temurin-25-jdk":            replace("jdk-openjdk"),
-		"vagrant":                   replace("vagrant"),
+		"vagrant":                   skipOverride(), // AUR-only
 		"vivaldi-stable":            replace("vivaldi"),
 		"webcamoid":                 skipOverride(), // AUR-only; provided via Flatpak when --gui
 		"wireshark":                 replace("wireshark-qt"),
@@ -164,6 +165,8 @@ var packageOverrides = map[string]map[string]overrideEntry{
 		"rg":                        replace("ripgrep"),
 		"temurin-25-jdk":            replace("temurin"),
 		"vivaldi-stable":            replace("vivaldi"),
+		"bashtop":                   replace("btop"),
+		"buildah":                   skipOverride(),
 		"shutter":                   skipOverride(),
 		"virt-manager":              skipOverride(),
 		"webcamoid":                 skipOverride(),

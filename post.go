@@ -245,8 +245,13 @@ func ensureNodeLTS() {
 	}
 
 	fmt.Println("[NVM] Enabling corepack and installing latest pnpm ...")
-	if !runShell(`bash -c 'source ~/.nvm/nvm.sh && corepack enable && corepack prepare pnpm@latest --activate && pnpm config set global-bin-dir "$HOME/.local/share/pnpm/bin"'`, CmdOpts{}).OK() {
+	if !runShell(`bash -c 'source ~/.nvm/nvm.sh && corepack enable && corepack prepare pnpm@latest --activate'`, CmdOpts{}).OK() {
 		errLog("Failed to enable corepack and prepare pnpm")
+		return
+	}
+	fmt.Println("[pnpm] Running pnpm setup to configure PATH ...")
+	if !runShell(`bash -c 'export SHELL=/bin/bash && source ~/.nvm/nvm.sh && pnpm setup'`, CmdOpts{}).OK() {
+		errLog("pnpm setup failed")
 	}
 }
 
@@ -384,9 +389,10 @@ func userLoginShell(uid string) string {
 func cloneNvimConfig() {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".config", "nvim")
-	repoURL := "git@github.com:JMR-dev/nvim-config.git"
+	const sshURL = "git@github.com:JMR-dev/nvim-config.git"
+	const httpsURL = "https://github.com/JMR-dev/nvim-config.git"
 
-	fmt.Printf("\n[Neovim] Setting up configuration from %s ...\n", repoURL)
+	fmt.Printf("\n[Neovim] Setting up configuration from %s ...\n", sshURL)
 
 	if _, err := osStat(configDir); err == nil {
 		n := 1
@@ -408,14 +414,18 @@ func cloneNvimConfig() {
 
 	osMkdirAll(filepath.Dir(configDir), 0o755)
 
-	repoName := strings.TrimSuffix(filepath.Base(repoURL), ".git")
+	repoName := strings.TrimSuffix(filepath.Base(sshURL), ".git")
 	tempClone := filepath.Join(filepath.Dir(configDir), repoName)
 	osRemoveAll(tempClone)
 
 	fmt.Printf("  Cloning to %s ...\n", configDir)
-	if !runCmd([]string{"git", "clone", repoURL, tempClone}, CmdOpts{}).OK() {
-		errLog("Neovim configuration clone failed")
-		return
+	if !runCmd([]string{"git", "clone", sshURL, tempClone}, CmdOpts{}).OK() {
+		fmt.Printf("  SSH clone failed; falling back to HTTPS (%s) ...\n", httpsURL)
+		osRemoveAll(tempClone)
+		if !runCmd([]string{"git", "clone", httpsURL, tempClone}, CmdOpts{}).OK() {
+			errLog("Neovim configuration clone failed")
+			return
+		}
 	}
 	if tempClone != configDir {
 		fmt.Printf("  Renaming %s to %s ...\n", filepath.Base(tempClone), filepath.Base(configDir))
@@ -468,6 +478,13 @@ func installAgy() {
 	}
 }
 
+func pnpmEnvPrefix() string {
+	if isMacOS {
+		return `export PNPM_HOME="$HOME/Library/pnpm"; export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"; `
+	}
+	return `export PNPM_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"; export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"; `
+}
+
 func installNpmPackage(pkgName string) {
 	home, _ := os.UserHomeDir()
 	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
@@ -476,8 +493,45 @@ func installNpmPackage(pkgName string) {
 	}
 	ensureNodeLTS()
 	fmt.Printf("  Installing %s via pnpm ...\n", pkgName)
-	if !runShell(fmt.Sprintf(`bash -c "source ~/.nvm/nvm.sh && pnpm add -g %s"`, pkgName), CmdOpts{}).OK() {
+	cmd := fmt.Sprintf(`bash -c '%ssource ~/.nvm/nvm.sh && pnpm add -g %s'`, pnpmEnvPrefix(), pkgName)
+	if !runShell(cmd, CmdOpts{}).OK() {
 		errLog(fmt.Sprintf("%s installation failed", pkgName))
+	}
+}
+
+func installPlaywright() {
+	home, _ := os.UserHomeDir()
+	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
+		errLog("NVM is not installed — cannot install playwright")
+		return
+	}
+	ensureNodeLTS()
+	fmt.Println("  Installing playwright via pnpm ...")
+	addCmd := fmt.Sprintf(`bash -c '%ssource ~/.nvm/nvm.sh && pnpm add -g playwright'`, pnpmEnvPrefix())
+	if !runShell(addCmd, CmdOpts{}).OK() {
+		errLog("playwright installation failed")
+		return
+	}
+	installCmd := "pnpx playwright install"
+	if pkgMgr == "apt-get" {
+		fmt.Println("  Installing Playwright browsers with dependencies ...")
+		installCmd += " --with-deps"
+	} else {
+		fmt.Println("  Installing Playwright browsers ...")
+	}
+	if !runShell(fmt.Sprintf(`bash -c '%ssource ~/.nvm/nvm.sh && %s'`, pnpmEnvPrefix(), installCmd), CmdOpts{}).OK() {
+		errLog("playwright browser installation failed")
+	}
+}
+
+func installGHExtension(repo string) {
+	if !hasCmd("gh") {
+		errLog("gh CLI is not installed — cannot install extension " + repo)
+		return
+	}
+	fmt.Printf("  Installing gh extension %s ...\n", repo)
+	if !runCmd([]string{"gh", "extension", "install", repo}, CmdOpts{}).OK() {
+		errLog(fmt.Sprintf("gh extension install %s failed", repo))
 	}
 }
 

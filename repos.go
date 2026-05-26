@@ -208,6 +208,18 @@ func setupDotnetRepo() {
 	)
 }
 
+func setupLazygitCoprRepo() {
+	if pkgMgr != "dnf" {
+		return
+	}
+	if repoFileExists("/etc/yum.repos.d/_copr:copr.fedorainfracloud.org:dejan:lazygit.repo") {
+		return
+	}
+	// dnf-plugins-core provides the `copr` subcommand on dnf4; on dnf5 it's a no-op.
+	runCmd([]string{"dnf", "install", "-y", "dnf-plugins-core"}, CmdOpts{AsSudo: true})
+	runCmd([]string{"dnf", "copr", "enable", "-y", "dejan/lazygit"}, CmdOpts{AsSudo: true})
+}
+
 type repoGroup struct {
 	members map[string]bool
 	setup   func()
@@ -229,5 +241,6 @@ func repoGroups() []repoGroup {
 		{mk("vivaldi-stable"), setupVivaldiRepo},
 		{mk("temurin-25-jdk"), setupTemurinRepo},
 		{mk("dotnet-sdk-10.0"), setupDotnetRepo},
+		{mk("lazygit"), setupLazygitCoprRepo},
 	}
 }
