@@ -88,6 +88,14 @@ func main() {
 				WithFile("/usr/local/bin/bootstrap_environment", binaryFile).
 				WithWorkdir("/tmp")
 
+			// Forward GitHub token so API calls are authenticated (avoids 403 rate-limits)
+			if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+				secret := client.SetSecret("github-token", tok)
+				testContainer = testContainer.
+					WithSecretVariable("GITHUB_TOKEN", secret).
+					WithSecretVariable("GH_TOKEN", secret)
+			}
+
 			// 4. Run bootstrap binary with safe args: --only custom --no-vm --no-ai
 			// We pipe 'y' to satisfy the "Proceed? [y/N]" prompt.
 			fmt.Printf("[%s] Executing bootstrap_environment...\n", target)
