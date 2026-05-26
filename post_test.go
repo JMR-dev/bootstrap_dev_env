@@ -361,6 +361,25 @@ func TestInstallPipAgyNpm(t *testing.T) {
 	if len(runShellCmds) < 1 || !strings.Contains(runShellCmds[len(runShellCmds)-1], "pnpm add -g my-package") {
 		t.Errorf("unexpected npm install command: %v", runShellCmds)
 	}
+	if !strings.Contains(runShellCmds[len(runShellCmds)-1], `PNPM_HOME=`) {
+		t.Errorf("expected PNPM_HOME export, got: %v", runShellCmds)
+	}
+
+	// macOS uses ~/Library/pnpm
+	resetMocks()
+	isMacOS = true
+	runShellCmds = nil
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		runShellCmds = append(runShellCmds, cmd)
+		return CmdResult{ExitCode: 0}
+	}
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil
+	}
+	installNpmPackage("my-package")
+	if len(runShellCmds) < 1 || !strings.Contains(runShellCmds[len(runShellCmds)-1], `Library/pnpm`) {
+		t.Errorf("expected macOS PNPM_HOME path, got: %v", runShellCmds)
+	}
 }
 
 func TestEnsurePythonAndNode(t *testing.T) {

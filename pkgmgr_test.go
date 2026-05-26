@@ -91,8 +91,15 @@ func TestResolveSystemPkgs(t *testing.T) {
 	if len(resolved) != 2 || resolved[0] != "btop" || resolved[1] != "ripgrep" {
 		t.Errorf("expected [btop ripgrep], got %v", resolved)
 	}
-	if len(skipped) != 1 || skipped[0] != "buildah" {
-		t.Errorf("expected skipped to be [buildah], got %v", skipped)
+	// pacman: docker-ce-rootless-extras and vagrant are AUR-only -> skipped;
+	// pipx is replaced with python-pipx.
+	pkgMgr = "pacman"
+	resolved, skipped = resolveSystemPkgs([]string{"docker-ce-rootless-extras", "vagrant", "pipx", "rg"})
+	if len(resolved) != 2 || resolved[0] != "python-pipx" || resolved[1] != "ripgrep" {
+		t.Errorf("expected [python-pipx ripgrep], got %v", resolved)
+	}
+	if len(skipped) != 2 || skipped[0] != "docker-ce-rootless-extras" || skipped[1] != "vagrant" {
+		t.Errorf("expected skipped [docker-ce-rootless-extras vagrant], got %v", skipped)
 	}
 }
 

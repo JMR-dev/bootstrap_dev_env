@@ -478,6 +478,13 @@ func installAgy() {
 	}
 }
 
+func pnpmEnvPrefix() string {
+	if isMacOS {
+		return `export PNPM_HOME="$HOME/Library/pnpm" && export PATH="$PNPM_HOME:$PATH" && `
+	}
+	return `export PNPM_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm" && export PATH="$PNPM_HOME:$PATH" && `
+}
+
 func installNpmPackage(pkgName string) {
 	home, _ := os.UserHomeDir()
 	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
@@ -486,7 +493,8 @@ func installNpmPackage(pkgName string) {
 	}
 	ensureNodeLTS()
 	fmt.Printf("  Installing %s via pnpm ...\n", pkgName)
-	if !runShell(fmt.Sprintf(`bash -c "source ~/.nvm/nvm.sh && pnpm add -g %s"`, pkgName), CmdOpts{}).OK() {
+	cmd := fmt.Sprintf(`bash -c "%ssource ~/.nvm/nvm.sh && pnpm add -g %s"`, pnpmEnvPrefix(), pkgName)
+	if !runShell(cmd, CmdOpts{}).OK() {
 		errLog(fmt.Sprintf("%s installation failed", pkgName))
 	}
 }
@@ -499,7 +507,8 @@ func installPlaywright() {
 	}
 	ensureNodeLTS()
 	fmt.Println("  Installing playwright via pnpm ...")
-	if !runShell(`bash -c "source ~/.nvm/nvm.sh && source ~/.bashrc 2>/dev/null; pnpm add -g playwright"`, CmdOpts{}).OK() {
+	addCmd := fmt.Sprintf(`bash -c "%ssource ~/.nvm/nvm.sh && pnpm add -g playwright"`, pnpmEnvPrefix())
+	if !runShell(addCmd, CmdOpts{}).OK() {
 		errLog("playwright installation failed")
 		return
 	}
@@ -510,7 +519,7 @@ func installPlaywright() {
 	} else {
 		fmt.Println("  Installing Playwright browsers ...")
 	}
-	if !runShell(fmt.Sprintf(`bash -c "source ~/.nvm/nvm.sh && source ~/.bashrc 2>/dev/null; %s"`, installCmd), CmdOpts{}).OK() {
+	if !runShell(fmt.Sprintf(`bash -c "%ssource ~/.nvm/nvm.sh && %s"`, pnpmEnvPrefix(), installCmd), CmdOpts{}).OK() {
 		errLog("playwright browser installation failed")
 	}
 }

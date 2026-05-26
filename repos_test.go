@@ -193,10 +193,55 @@ func TestSetupDotnetRepo(t *testing.T) {
 	}
 }
 
+func TestSetupLazygitCoprRepo(t *testing.T) {
+	defer resetMocks()
+
+	// On non-dnf hosts, it's a no-op.
+	pkgMgr = "apt-get"
+	called := false
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		called = true
+		return CmdResult{ExitCode: 0}
+	}
+	setupLazygitCoprRepo()
+	if called {
+		t.Errorf("expected no-op on apt-get, but runCmd was called")
+	}
+
+	// On dnf with repo absent, copr enable is invoked.
+	pkgMgr = "dnf"
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+	var calls [][]string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		calls = append(calls, argv)
+		return CmdResult{ExitCode: 0}
+	}
+	setupLazygitCoprRepo()
+	joined := ""
+	for _, c := range calls {
+		joined += strings.Join(c, " ") + "\n"
+	}
+	if !strings.Contains(joined, "copr enable -y dejan/lazygit") {
+		t.Errorf("expected copr enable call, got: %s", joined)
+	}
+
+	// If the COPR repo file already exists, no commands are run.
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil
+	}
+	calls = nil
+	setupLazygitCoprRepo()
+	if len(calls) != 0 {
+		t.Errorf("expected no commands when repo file exists, got %v", calls)
+	}
+}
+
 func TestRepoGroups(t *testing.T) {
 	groups := repoGroups()
-	if len(groups) != 6 {
-		t.Errorf("expected 6 repo groups, got %d", len(groups))
+	if len(groups) != 7 {
+		t.Errorf("expected 7 repo groups, got %d", len(groups))
 	}
 }
 
