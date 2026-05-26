@@ -12,27 +12,23 @@ func TestIssuesLogging(t *testing.T) {
 	defer resetMocks()
 	resetMocks()
 
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
+	// Capture issue log output via the injectable writer.
+	var buf bytes.Buffer
+	oldWriter := issueLogWriter
+	issueLogWriter = &buf
+	defer func() { issueLogWriter = oldWriter }()
 
 	warn("something is deprecated")
 	errLog("something failed")
 	notice("please restart shell")
 
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
 	output := buf.String()
 
 	if !strings.Contains(output, "[WARN] something is deprecated") {
-		t.Errorf("stdout missing warning: %q", output)
+		t.Errorf("output missing warning: %q", output)
 	}
 	if !strings.Contains(output, "[ERROR] something failed") {
-		t.Errorf("stdout missing error: %q", output)
+		t.Errorf("output missing error: %q", output)
 	}
 
 	issuesMu.Lock()

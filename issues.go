@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,12 +18,15 @@ var (
 	issues     []string
 	notices    []string
 	errorCount int
+	// issueLogWriter is the destination for human-facing issue log lines.
+	// Overridden during tests to suppress intentional error-path output.
+	issueLogWriter io.Writer = os.Stdout
 )
 
 func logIssue(level, msg string) {
 	issuesMu.Lock()
 	defer issuesMu.Unlock()
-	fmt.Printf("  [%s] %s\n", level, msg)
+	fmt.Fprintf(issueLogWriter, "  [%s] %s\n", level, msg)
 	issues = append(issues, fmt.Sprintf("[%s] %s", level, msg))
 	if level == "ERROR" {
 		errorCount++
