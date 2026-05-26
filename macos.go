@@ -57,14 +57,14 @@ func ensureHomebrew() {
 	installer := `NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 	if !runShell(installer, CmdOpts{}).OK() {
 		fmt.Fprintln(os.Stderr, "Homebrew installation failed")
-		os.Exit(1)
+		osExit(1)
 	}
 
 	brewBinDir := filepath.Join(brewPrefix(), "bin")
 	brewPath := filepath.Join(brewBinDir, "brew")
-	if _, err := os.Stat(brewPath); err != nil {
+	if _, err := osStat(brewPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Homebrew installed but brew not found at %s\n", brewPath)
-		os.Exit(1)
+		osExit(1)
 	}
 
 	os.Setenv("PATH", brewBinDir+":"+os.Getenv("PATH"))
@@ -286,19 +286,19 @@ runcmd:
 `
 
 func writeCloudInitSeed(seedDir, pubkey string) error {
-	if err := os.MkdirAll(seedDir, 0o755); err != nil {
+	if err := osMkdirAll(seedDir, 0o755); err != nil {
 		return err
 	}
 	userData := fmt.Sprintf(firecrackerUserdataTmpl, vmUser, strings.TrimSpace(pubkey))
-	if err := os.WriteFile(filepath.Join(seedDir, "user-data"), []byte(userData), 0o644); err != nil {
+	if err := osWriteFile(filepath.Join(seedDir, "user-data"), []byte(userData), 0o644); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(seedDir, "meta-data"),
+	return osWriteFile(filepath.Join(seedDir, "meta-data"),
 		[]byte("instance-id: firecracker-vm\nlocal-hostname: firecracker-vm\n"), 0o644)
 }
 
 func buildSeedISO(seedDir, isoPath string) bool {
-	os.Remove(isoPath)
+	osRemove(isoPath)
 	return runCmd([]string{
 		"hdiutil", "makehybrid", "-iso", "-joliet",
 		"-default-volume-name", "cidata",
@@ -346,7 +346,7 @@ fi
 rm -f %s
 %s`, dir, vmPIDName, vmPIDName, vmPIDName, qemuBlock)
 
-	os.WriteFile(scriptPath, []byte(script), 0o755)
+	osWriteFile(scriptPath, []byte(script), 0o755)
 	return scriptPath
 }
 
@@ -440,7 +440,7 @@ func installFirecrackerZshFunction(content string) {
 	home, _ := os.UserHomeDir()
 	zshrc := filepath.Join(home, ".zshrc")
 	existing := ""
-	if b, err := os.ReadFile(zshrc); err == nil {
+	if b, err := osReadFile(zshrc); err == nil {
 		existing = string(b)
 	}
 	pattern := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(firecrackerFnBeg) + `.*?` + regexp.QuoteMeta(firecrackerFnEnd) + `\n?`)
@@ -454,7 +454,7 @@ func installFirecrackerZshFunction(content string) {
 			newContent = content
 		}
 	}
-	os.WriteFile(zshrc, []byte(newContent), 0o644)
+	osWriteFile(zshrc, []byte(newContent), 0o644)
 	fmt.Printf("  Wrote firecracker() function block to %s\n", zshrc)
 }
 
@@ -488,7 +488,7 @@ func provisionVirtualBoxVM(qcow2, seedISO string) string {
 	exists := ok && r.ExitCode == 0
 
 	if !exists {
-		if _, err := os.Stat(vdi); os.IsNotExist(err) {
+		if _, err := osStat(vdi); os.IsNotExist(err) {
 			fmt.Printf("  Converting %s → %s (VirtualBox VDI) ...\n", filepath.Base(qcow2), filepath.Base(vdi))
 			if !runCmd([]string{"VBoxManage", "clonemedium", "disk", qcow2, vdi, "--format", "VDI"}, CmdOpts{}).OK() {
 				errLog("VBoxManage clonemedium failed")
@@ -497,7 +497,7 @@ func provisionVirtualBoxVM(qcow2, seedISO string) string {
 			runCmd([]string{"VBoxManage", "modifymedium", "disk", vdi, "--resize", "10240"}, CmdOpts{})
 		}
 		fmt.Printf("  Creating VirtualBox VM '%s' ...\n", vmName)
-		os.MkdirAll(vboxBase, 0o755)
+		osMkdirAll(vboxBase, 0o755)
 		if !runCmd([]string{
 			"VBoxManage", "createvm",
 			"--name", vmName,
@@ -543,7 +543,7 @@ if VBoxManage list runningvms | grep -q '"%s"'; then
 fi
 exec VBoxManage startvm %s --type headless
 `, vmName, vmName)
-	os.WriteFile(scriptPath, []byte(script), 0o755)
+	osWriteFile(scriptPath, []byte(script), 0o755)
 	return scriptPath
 }
 
@@ -558,11 +558,11 @@ func setupFirecrackerVM() {
 
 	fmt.Println("\n=== macOS firecracker VM (Fedora) ===")
 	dir := vmDir()
-	os.MkdirAll(dir, 0o755)
+	osMkdirAll(dir, 0o755)
 
 	privKey := filepath.Join(dir, vmKeyName)
 	pubKey := privKey + ".pub"
-	if _, err := os.Stat(privKey); os.IsNotExist(err) {
+	if _, err := osStat(privKey); os.IsNotExist(err) {
 		fmt.Printf("  Generating SSH keypair at %s ...\n", privKey)
 		if !runCmd([]string{"ssh-keygen", "-t", "ed25519", "-N", "", "-f", privKey, "-q"}, CmdOpts{}).OK() {
 			errLog("ssh-keygen failed — aborting VM setup")
@@ -571,7 +571,7 @@ func setupFirecrackerVM() {
 	}
 
 	qcow2 := filepath.Join(dir, vmQcow2Name)
-	if _, err := os.Stat(qcow2); err == nil {
+	if _, err := osStat(qcow2); err == nil {
 		fmt.Printf("  Reusing existing Fedora image at %s\n", qcow2)
 	} else {
 		fmt.Println("  Looking up latest Fedora cloud image ...")
@@ -587,10 +587,10 @@ func setupFirecrackerVM() {
 			return
 		}
 		if !verifyFedoraQcow2(downloadDest, checksumURL) {
-			os.Remove(downloadDest)
+			osRemove(downloadDest)
 			return
 		}
-		os.Rename(downloadDest, qcow2)
+		osRename(downloadDest, qcow2)
 		if hasCmd("qemu-img") {
 			fmt.Println("  Resizing image to 10G ...")
 			runCmd([]string{"qemu-img", "resize", qcow2, "10G"}, CmdOpts{})
@@ -599,7 +599,7 @@ func setupFirecrackerVM() {
 
 	fmt.Println("  Building cloud-init seed ISO ...")
 	seedDir := filepath.Join(dir, "seed")
-	pubKeyBytes, err := os.ReadFile(pubKey)
+	pubKeyBytes, err := osReadFile(pubKey)
 	if err != nil {
 		errLog(fmt.Sprintf("could not read public key: %v", err))
 		return

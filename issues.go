@@ -54,7 +54,7 @@ func writeRunLog() {
 	lines := []string{fmt.Sprintf("# Bootstrap run — %s", ts), ""}
 	lines = append(lines, issues...)
 	content := strings.Join(lines, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := osWriteFile(path, []byte(content), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write run log: %v\n", err)
 		return
 	}

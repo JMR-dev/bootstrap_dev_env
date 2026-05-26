@@ -13,7 +13,30 @@ func initPkgMgr() {
 	pkgMgr = detectPkgMgr()
 	isRHELFamily = detectRHELFamily()
 	isArchFamily = detectArchFamily()
+	ensureWhichInstalled()
 }
+
+func ensureWhichInstalled() {
+	if hasCmd("which") {
+		return
+	}
+	fmt.Println("[which] 'which' is not installed. Installing it as a prerequisite...")
+	var res CmdResult
+	switch pkgMgr {
+	case "pacman":
+		res = runCmd([]string{"pacman", "-Sy", "--noconfirm", "--needed", "which"}, CmdOpts{AsSudo: true})
+	case "brew":
+		res = runCmd([]string{"brew", "install", "which"}, CmdOpts{})
+	default:
+		res = runCmd([]string{pkgMgr, "install", "-y", "which"}, CmdOpts{AsSudo: true})
+	}
+	if !res.OK() {
+		fmt.Fprintf(os.Stderr, "Warning: failed to install 'which' prerequisite: %v\n", res.Err)
+	} else {
+		fmt.Println("[which] 'which' successfully installed.")
+	}
+}
+
 
 func detectPkgMgr() string {
 	if isMacOS {
@@ -27,7 +50,7 @@ func detectPkgMgr() string {
 		}
 	}
 	fmt.Fprintln(os.Stderr, "No supported package manager found (expected dnf, apt-get, pacman, or brew on macOS).")
-	os.Exit(1)
+	osExit(1)
 	return ""
 }
 

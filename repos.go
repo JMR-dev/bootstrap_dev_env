@@ -2,14 +2,13 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 )
 
 // repoFileExists returns true if any of the given paths exists.
 func repoFileExists(paths ...string) bool {
 	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
+		if _, err := osStat(p); err == nil {
 			return true
 		}
 	}

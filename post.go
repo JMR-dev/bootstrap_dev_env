@@ -138,11 +138,11 @@ func latestStablePython(pyenvBin string) string {
 func ensurePythonLatest() *sync.WaitGroup {
 	home, _ := os.UserHomeDir()
 	pyenvDir := filepath.Join(home, ".pyenv")
-	if _, err := os.Stat(pyenvDir); err != nil {
+	if _, err := osStat(pyenvDir); err != nil {
 		return nil
 	}
 	pyenvBin := filepath.Join(pyenvDir, "bin", "pyenv")
-	if _, err := os.Stat(pyenvBin); err != nil {
+	if _, err := osStat(pyenvBin); err != nil {
 		warn(fmt.Sprintf("pyenv binary not found at %s", pyenvBin))
 		return nil
 	}
@@ -222,7 +222,7 @@ func installNVM() {
 
 func ensureNodeLTS() {
 	home, _ := os.UserHomeDir()
-	if _, err := os.Stat(filepath.Join(home, ".nvm")); err != nil {
+	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
 		return
 	}
 	check := runShell(`bash -c "source ~/.nvm/nvm.sh 2>/dev/null && nvm version lts/* 2>/dev/null"`,
@@ -263,7 +263,7 @@ func installOhMyZsh() {
 	}
 	home, _ := os.UserHomeDir()
 	target := filepath.Join(home, ".oh-my-zsh")
-	if _, err := os.Stat(target); err == nil {
+	if _, err := osStat(target); err == nil {
 		fmt.Printf("  oh-my-zsh already present at %s; updating theme only\n", target)
 	} else {
 		fmt.Println("  Installing oh-my-zsh via the official installer ...")
@@ -275,7 +275,7 @@ func installOhMyZsh() {
 	}
 
 	zshrc := filepath.Join(home, ".zshrc")
-	data, err := os.ReadFile(zshrc)
+	data, err := osReadFile(zshrc)
 	if err != nil {
 		warn("~/.zshrc not present after oh-my-zsh install; cannot set theme")
 		return
@@ -289,7 +289,7 @@ func installOhMyZsh() {
 		newText = strings.TrimRight(text, "\n") + "\nZSH_THEME=\"gnzh\"\n"
 	}
 	if newText != text {
-		if err := os.WriteFile(zshrc, []byte(newText), 0o644); err != nil {
+		if err := osWriteFile(zshrc, []byte(newText), 0o644); err != nil {
 			errLog(fmt.Sprintf("could not write ~/.zshrc: %v", err))
 			return
 		}
@@ -365,7 +365,7 @@ func ensureZshDefault() {
 // macOS the shell may be set by dscl; getent isn't available either, so we
 // just read passwd directly which works on every supported platform.
 func userLoginShell(uid string) string {
-	data, err := os.ReadFile("/etc/passwd")
+	data, err := osReadFile(passwdPath)
 	if err != nil {
 		return ""
 	}
@@ -388,29 +388,29 @@ func cloneNvimConfig() {
 
 	fmt.Printf("\n[Neovim] Setting up configuration from %s ...\n", repoURL)
 
-	if _, err := os.Stat(configDir); err == nil {
+	if _, err := osStat(configDir); err == nil {
 		n := 1
 		var backup string
 		for {
 			backup = filepath.Join(filepath.Dir(configDir), fmt.Sprintf("nvim-%d", n))
-			if _, err := os.Stat(backup); os.IsNotExist(err) {
+			if _, err := osStat(backup); os.IsNotExist(err) {
 				break
 			}
 			n++
 		}
 		fmt.Printf("  Renaming existing %s → %s ...\n", configDir, backup)
-		if err := os.Rename(configDir, backup); err != nil {
+		if err := osRename(configDir, backup); err != nil {
 			errLog(fmt.Sprintf("could not back up existing nvim config: %v", err))
 			return
 		}
 		notice(fmt.Sprintf("Previous Neovim config preserved at %s", backup))
 	}
 
-	os.MkdirAll(filepath.Dir(configDir), 0o755)
+	osMkdirAll(filepath.Dir(configDir), 0o755)
 
 	repoName := strings.TrimSuffix(filepath.Base(repoURL), ".git")
 	tempClone := filepath.Join(filepath.Dir(configDir), repoName)
-	os.RemoveAll(tempClone)
+	osRemoveAll(tempClone)
 
 	fmt.Printf("  Cloning to %s ...\n", configDir)
 	if !runCmd([]string{"git", "clone", repoURL, tempClone}, CmdOpts{}).OK() {
@@ -419,7 +419,7 @@ func cloneNvimConfig() {
 	}
 	if tempClone != configDir {
 		fmt.Printf("  Renaming %s to %s ...\n", filepath.Base(tempClone), filepath.Base(configDir))
-		os.Rename(tempClone, configDir)
+		osRename(tempClone, configDir)
 	}
 	fmt.Printf("  Neovim configuration ready at %s\n", configDir)
 }
@@ -452,7 +452,7 @@ func checkAndSetupSSH() {
 func askYN(prompt string) bool {
 	fmt.Print(prompt)
 	var buf [256]byte
-	n, err := os.Stdin.Read(buf[:])
+	n, err := stdin.Read(buf[:])
 	if err != nil && err != io.EOF {
 		fmt.Println()
 		return false
@@ -470,7 +470,7 @@ func installAgy() {
 
 func installNpmPackage(pkgName string) {
 	home, _ := os.UserHomeDir()
-	if _, err := os.Stat(filepath.Join(home, ".nvm")); err != nil {
+	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
 		errLog("NVM is not installed — cannot install " + pkgName)
 		return
 	}
