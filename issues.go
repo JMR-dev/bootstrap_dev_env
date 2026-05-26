@@ -13,9 +13,10 @@ import (
 // when there's something to report.
 
 var (
-	issuesMu sync.Mutex
-	issues   []string
-	notices  []string
+	issuesMu   sync.Mutex
+	issues     []string
+	notices    []string
+	errorCount int
 )
 
 func logIssue(level, msg string) {
@@ -23,10 +24,19 @@ func logIssue(level, msg string) {
 	defer issuesMu.Unlock()
 	fmt.Printf("  [%s] %s\n", level, msg)
 	issues = append(issues, fmt.Sprintf("[%s] %s", level, msg))
+	if level == "ERROR" {
+		errorCount++
+	}
 }
 
 func warn(msg string)   { logIssue("WARN", msg) }
 func errLog(msg string) { logIssue("ERROR", msg) }
+
+func hasErrors() bool {
+	issuesMu.Lock()
+	defer issuesMu.Unlock()
+	return errorCount > 0
+}
 
 func notice(msg string) {
 	issuesMu.Lock()

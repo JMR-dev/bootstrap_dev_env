@@ -169,6 +169,11 @@ func runMain(args []string) {
 	printNotices()
 	fmt.Println("\nDone.")
 
+	if hasErrors() {
+		osExit(1)
+		return
+	}
+
 	home, _ := os.UserHomeDir()
 	zshrc := filepath.Join(home, ".zshrc")
 	if hasCmd("zsh") {

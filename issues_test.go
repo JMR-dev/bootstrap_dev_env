@@ -38,6 +38,7 @@ func TestIssuesLogging(t *testing.T) {
 	issuesMu.Lock()
 	issueLen := len(issues)
 	noticeLen := len(notices)
+	errCount := errorCount
 	issuesMu.Unlock()
 
 	if issueLen != 2 {
@@ -45,6 +46,12 @@ func TestIssuesLogging(t *testing.T) {
 	}
 	if noticeLen != 1 {
 		t.Errorf("expected 1 notice, got %d", noticeLen)
+	}
+	if errCount != 1 {
+		t.Errorf("expected 1 error count, got %d", errCount)
+	}
+	if !hasErrors() {
+		t.Error("expected hasErrors() to return true after errLog call")
 	}
 }
 
@@ -80,6 +87,24 @@ func TestWriteRunLog(t *testing.T) {
 	}
 	if !strings.Contains(string(writtenData), "[WARN] test warning") {
 		t.Errorf("expected log to contain the warning, got: %s", string(writtenData))
+	}
+}
+
+func TestHasErrors(t *testing.T) {
+	defer resetMocks()
+
+	if hasErrors() {
+		t.Error("expected hasErrors() false with no errors logged")
+	}
+
+	warn("just a warning")
+	if hasErrors() {
+		t.Error("expected hasErrors() false after only a warning")
+	}
+
+	errLog("a real error")
+	if !hasErrors() {
+		t.Error("expected hasErrors() true after errLog call")
 	}
 }
 

@@ -38,5 +38,6 @@ func resetMocks() {
 	issuesMu.Lock()
 	issues = nil
 	notices = nil
+	errorCount = 0
 	issuesMu.Unlock()
 }
