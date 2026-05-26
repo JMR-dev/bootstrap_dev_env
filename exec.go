@@ -37,8 +37,8 @@ type CmdResult struct {
 
 func (r CmdResult) OK() bool { return r.Err == nil && r.ExitCode == 0 }
 
-// runCmd executes argv with the supplied options.
-func runCmd(argv []string, opts CmdOpts) CmdResult {
+// runCmdReal executes argv with the supplied options.
+func runCmdReal(argv []string, opts CmdOpts) CmdResult {
 	if opts.Timeout == 0 {
 		opts.Timeout = defaultSubprocessTimeout
 	}
@@ -90,9 +90,9 @@ func runCmd(argv []string, opts CmdOpts) CmdResult {
 	return res
 }
 
-// runShell executes a single shell string via /bin/sh -c (matching the Python
+// runShellReal executes a single shell string via /bin/sh -c (matching the Python
 // version's subprocess.run(..., shell=True)).
-func runShell(cmd string, opts CmdOpts) CmdResult {
+func runShellReal(cmd string, opts CmdOpts) CmdResult {
 	if opts.Timeout == 0 {
 		opts.Timeout = defaultSubprocessTimeout
 	}
@@ -141,16 +141,16 @@ func runShell(cmd string, opts CmdOpts) CmdResult {
 	return res
 }
 
-// hasCmd is shutil.which() — returns true if name resolves on PATH.
-func hasCmd(name string) bool {
+// hasCmdReal is shutil.which() — returns true if name resolves on PATH.
+func hasCmdReal(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
 }
 
-// probe is a short, read-only command invocation used for "is this installed"
+// probeReal is a short, read-only command invocation used for "is this installed"
 // checks. Returns (result, true) on completion (including non-zero exit) and
 // (zero, false) on timeout/launch failure.
-func probe(argv []string, timeout time.Duration) (CmdResult, bool) {
+func probeReal(argv []string, timeout time.Duration) (CmdResult, bool) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}

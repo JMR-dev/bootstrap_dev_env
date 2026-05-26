@@ -130,7 +130,7 @@ func isCustomPkgInstalled(pkg *CustomPackage) (bool, string) {
 		return false, ""
 	}
 	check := expandHome(raw)
-	if _, err := os.Stat(check); err == nil {
+	if _, err := osStat(check); err == nil {
 		return true, check
 	}
 	return false, check
@@ -195,7 +195,7 @@ func urlArchOK(pkg *CustomPackage) bool {
 
 func installGo(archive string) {
 	goRoot := "/usr/local/go"
-	if _, err := os.Stat(goRoot); err == nil {
+	if _, err := osStat(goRoot); err == nil {
 		fmt.Printf("  Removing existing Go at %s ...\n", goRoot)
 		runCmd([]string{"rm", "-rf", goRoot}, CmdOpts{AsSudo: true})
 	}
@@ -215,6 +215,9 @@ func installFirecracker(archive, tmp string) {
 			return nil
 		}
 		name := info.Name()
+		if strings.HasSuffix(name, ".tgz") || strings.HasSuffix(name, ".tar.gz") {
+			return nil
+		}
 		if !strings.HasPrefix(name, "firecracker") {
 			return nil
 		}
@@ -226,6 +229,7 @@ func installFirecracker(archive, tmp string) {
 		}
 		return nil
 	})
+
 	if binary == "" {
 		errLog("firecracker binary not found in archive")
 		return
@@ -239,7 +243,7 @@ func installFirecracker(archive, tmp string) {
 func installZig(pkg *CustomPackage, archive string) {
 	parent := "/usr/local"
 	zigDir := filepath.Join(parent, "zig-"+pkg.Version)
-	if _, err := os.Stat(zigDir); err == nil {
+	if _, err := osStat(zigDir); err == nil {
 		runCmd([]string{"rm", "-rf", zigDir}, CmdOpts{AsSudo: true})
 	}
 	runCmd([]string{"tar", "-C", parent, "-xJf", archive}, CmdOpts{AsSudo: true})
@@ -501,7 +505,7 @@ func installCustomPackages(toInstall []*CustomPackage) {
 				continue
 			}
 			installNeovim(pkg, tmp)
-			os.RemoveAll(tmp)
+			osRemoveAll(tmp)
 			continue
 		case "agy":
 			installAgy()
@@ -535,11 +539,11 @@ func installCustomPackages(toInstall []*CustomPackage) {
 		}
 		archive := filepath.Join(tmp, filepath.Base(url))
 		if !download(url, archive) {
-			os.RemoveAll(tmp)
+			osRemoveAll(tmp)
 			continue
 		}
 		if !verifyArchive(archive, pkg) {
-			os.RemoveAll(tmp)
+			osRemoveAll(tmp)
 			continue
 		}
 		switch name {
@@ -552,6 +556,6 @@ func installCustomPackages(toInstall []*CustomPackage) {
 		default:
 			warn(fmt.Sprintf("No install handler for '%s' — skipping", pkg.Name))
 		}
-		os.RemoveAll(tmp)
+		osRemoveAll(tmp)
 	}
 }

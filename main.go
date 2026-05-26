@@ -30,17 +30,23 @@ import (
 )
 
 func main() {
-	only := flag.String("only", "", "Install only the named section (system|flatpak|custom)")
-	gui := flag.Bool("gui", false, "Include GUI applications (headed environments).")
-	noVM := flag.Bool("no-vm", false, "macOS only: skip provisioning the Fedora-on-QEMU VM that backs the firecracker() zsh wrapper.")
-	noAI := flag.Bool("no-ai", false, "Skip installation of LLM/AI CLI tools (agy, claude, codex, copilot).")
-	flag.Parse()
+	runMain(os.Args)
+}
+
+func runMain(args []string) {
+	fs := flag.NewFlagSet(args[0], flag.ExitOnError)
+	only := fs.String("only", "", "Install only the named section (system|flatpak|custom)")
+	gui := fs.Bool("gui", false, "Include GUI applications (headed environments).")
+	noVM := fs.Bool("no-vm", false, "macOS only: skip provisioning the Fedora-on-QEMU VM that backs the firecracker() zsh wrapper.")
+	noAI := fs.Bool("no-ai", false, "Skip installation of LLM/AI CLI tools (agy, claude, codex, copilot).")
+	_ = fs.Parse(args[1:])
 
 	switch *only {
 	case "", "system", "flatpak", "custom":
 	default:
 		fmt.Fprintf(os.Stderr, "invalid --only value %q (use system|flatpak|custom)\n", *only)
-		os.Exit(2)
+		osExit(2)
+		return
 	}
 
 	initPkgMgr()
@@ -122,7 +128,8 @@ func main() {
 
 	if !askYN(fmt.Sprintf("\n%d item(s) to install. Proceed? [y/N] ", total)) {
 		fmt.Fprintln(os.Stderr, "Aborted.")
-		os.Exit(1)
+		osExit(1)
+		return
 	}
 
 	checkSudo()
@@ -165,7 +172,7 @@ func main() {
 	home, _ := os.UserHomeDir()
 	zshrc := filepath.Join(home, ".zshrc")
 	if hasCmd("zsh") {
-		if _, err := os.Stat(zshrc); err == nil {
+		if _, err := osStat(zshrc); err == nil {
 			fmt.Println("\nSourcing ~/.zshrc ...")
 			runShell(fmt.Sprintf("zsh -c 'source %s'", zshrc), CmdOpts{})
 		}
@@ -177,18 +184,21 @@ func checkSudo() {
 		if isMacOS {
 			fmt.Fprintln(os.Stderr, "Do not run this with sudo on macOS — Homebrew refuses to run as root. "+
 				"Re-run as your regular user; the tool will request sudo for the operations that need it.")
-			os.Exit(1)
+			osExit(1)
+			return
 		}
 		return
 	}
 	if !hasCmd("sudo") {
 		fmt.Fprintln(os.Stderr, "sudo is required but not installed.")
-		os.Exit(1)
+		osExit(1)
+		return
 	}
 	fmt.Println("Validating sudo access ...")
 	r := runCmd([]string{"sudo", "-v"}, CmdOpts{Timeout: 2 * time.Minute})
 	if r.ExitCode != 0 {
 		fmt.Fprintln(os.Stderr, "sudo authentication failed.")
-		os.Exit(1)
+		osExit(1)
+		return
 	}
 }

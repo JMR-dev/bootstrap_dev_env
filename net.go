@@ -17,8 +17,8 @@ const httpClientTimeout = 30 * time.Minute
 
 var httpClient = &http.Client{Timeout: httpClientTimeout}
 
-// download streams url -> dest. Returns true on success.
-func download(url, dest string) bool {
+// downloadReal streams url -> dest. Returns true on success.
+func downloadReal(url, dest string) bool {
 	fmt.Printf("  Downloading %s ...\n", filepath.Base(url))
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -48,9 +48,9 @@ func download(url, dest string) bool {
 	return true
 }
 
-// fetchJSON GETs url with the GitHub API Accept header and decodes the body
+// fetchJSONReal GETs url with the GitHub API Accept header and decodes the body
 // into v. Returns true on success.
-func fetchJSON(url string, v any) bool {
+func fetchJSONReal(url string, v any) bool {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		errLog(fmt.Sprintf("API request failed for %s: %v", url, err))
@@ -77,8 +77,8 @@ func fetchJSON(url string, v any) bool {
 	return true
 }
 
-// fetchText returns the trimmed body of url. Returns empty string on failure.
-func fetchText(url string) string {
+// fetchTextReal returns the trimmed body of url. Returns empty string on failure.
+func fetchTextReal(url string) string {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		errLog(fmt.Sprintf("Fetch failed for %s: %v", url, err))

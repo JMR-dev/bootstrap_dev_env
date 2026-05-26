@@ -38,7 +38,7 @@ var guiSystemPkgs = map[string]bool{
 
 func isSpecialPkgInstalled(pkg string) bool {
 	home, _ := os.UserHomeDir()
-	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	exists := func(p string) bool { _, err := osStat(p); return err == nil }
 	switch pkg {
 	case "obsidian":
 		return exists("/usr/local/bin/obsidian")
@@ -253,7 +253,7 @@ func installMinikube(tmp string) {
 func installBashtop(_ string) {
 	home, _ := os.UserHomeDir()
 	cloneDir := filepath.Join(home, "bashtop")
-	if _, err := os.Stat(cloneDir); err == nil {
+	if _, err := osStat(cloneDir); err == nil {
 		fmt.Printf("  Updating existing clone at %s ...\n", cloneDir)
 		if !runCmd([]string{"git", "-C", cloneDir, "pull"}, CmdOpts{}).OK() {
 			errLog("bashtop git pull failed")
@@ -424,7 +424,7 @@ func installSystemPackages(regular, special []string) {
 			errLog(fmt.Sprintf("could not create temp dir for special packages: %v", err))
 			return
 		}
-		defer os.RemoveAll(tmp)
+		defer osRemoveAll(tmp)
 		for _, pkg := range special {
 			fmt.Printf("\n  [SPECIAL] Installing %s ...\n", pkg)
 			installSpecialPkg(pkg, tmp)

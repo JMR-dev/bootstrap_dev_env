@@ -35,7 +35,7 @@ func detectOS() string {
 		return "macos"
 	default:
 		fmt.Fprintf(os.Stderr, "Unsupported OS: %s (supports Linux, Darwin)\n", runtime.GOOS)
-		os.Exit(1)
+		osExit(1)
 		return ""
 	}
 }
@@ -48,7 +48,7 @@ func detectArch() string {
 		return "aarch64"
 	default:
 		fmt.Fprintf(os.Stderr, "Unsupported architecture: %s (supports x86_64, aarch64)\n", runtime.GOARCH)
-		os.Exit(1)
+		osExit(1)
 		return ""
 	}
 }
@@ -116,7 +116,7 @@ func hasOtherArchToken(name string) bool {
 // stripped of surrounding quotes. Returns "" if the file is missing or the
 // field is absent.
 func osReleaseField(field string) string {
-	data, err := os.ReadFile("/etc/os-release")
+	data, err := osReadFile(osReleasePath)
 	if err != nil {
 		return ""
 	}
@@ -130,7 +130,7 @@ func osReleaseField(field string) string {
 }
 
 func detectRHELFamily() bool {
-	data, err := os.ReadFile("/etc/os-release")
+	data, err := osReadFile(osReleasePath)
 	if err != nil {
 		return pkgMgr == "dnf"
 	}
@@ -152,7 +152,7 @@ func detectRHELFamily() bool {
 }
 
 func detectArchFamily() bool {
-	data, err := os.ReadFile("/etc/os-release")
+	data, err := osReadFile(osReleasePath)
 	if err != nil {
 		return pkgMgr == "pacman"
 	}

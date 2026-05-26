@@ -1,0 +1,61 @@
+name: macOS Manual Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to run against'
+        required: true
+        default: 'main'
+        type: choice
+        options:
+          - main
+          - dev
+          - fix-add-unit-testing
+      workflow_definition:
+        description: 'Workflow Run Configuration'
+        required: true
+        default: 'custom-only'
+        type: choice
+        options:
+          - 'custom-only'
+          - 'system-only'
+          - 'full-setup'
+
+jobs:
+  test-mac-manual:
+    name: macOS Manual Run
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Build bootstrap binary
+        run: |
+          go build -o bootstrap_environment .
+
+      - name: Pre-create ~/.pyenv directory
+        run: |
+          mkdir -p ~/.pyenv
+
+      - name: Run bootstrap tool (custom-only)
+        if: ${{ inputs.workflow_definition == 'custom-only' }}
+        run: |
+          echo y | ./bootstrap_environment --only custom --no-vm --no-ai
+
+      - name: Run bootstrap tool (system-only)
+        if: ${{ inputs.workflow_definition == 'system-only' }}
+        run: |
+          echo y | ./bootstrap_environment --only system --no-vm --no-ai
+
+      - name: Run bootstrap tool (full-setup)
+        if: ${{ inputs.workflow_definition == 'full-setup' }}
+        run: |
+          echo y | ./bootstrap_environment --no-vm --no-ai
