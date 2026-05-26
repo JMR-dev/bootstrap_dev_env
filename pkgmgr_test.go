@@ -84,6 +84,16 @@ func TestResolveSystemPkgs(t *testing.T) {
 	if len(skipped) != 1 || skipped[0] != "docker-compose" {
 		t.Errorf("expected skipped to be [docker-compose], got %v", skipped)
 	}
+
+	// brew: bashtop -> btop (replace), buildah -> skipped
+	pkgMgr = "brew"
+	resolved, skipped = resolveSystemPkgs([]string{"bashtop", "buildah", "rg"})
+	if len(resolved) != 2 || resolved[0] != "btop" || resolved[1] != "ripgrep" {
+		t.Errorf("expected [btop ripgrep], got %v", resolved)
+	}
+	if len(skipped) != 1 || skipped[0] != "buildah" {
+		t.Errorf("expected skipped to be [buildah], got %v", skipped)
+	}
 }
 
 func TestIsSystemPkgInstalled(t *testing.T) {

@@ -389,9 +389,10 @@ func userLoginShell(uid string) string {
 func cloneNvimConfig() {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".config", "nvim")
-	repoURL := "git@github.com:JMR-dev/nvim-config.git"
+	const sshURL = "git@github.com:JMR-dev/nvim-config.git"
+	const httpsURL = "https://github.com/JMR-dev/nvim-config.git"
 
-	fmt.Printf("\n[Neovim] Setting up configuration from %s ...\n", repoURL)
+	fmt.Printf("\n[Neovim] Setting up configuration from %s ...\n", sshURL)
 
 	if _, err := osStat(configDir); err == nil {
 		n := 1
@@ -413,14 +414,18 @@ func cloneNvimConfig() {
 
 	osMkdirAll(filepath.Dir(configDir), 0o755)
 
-	repoName := strings.TrimSuffix(filepath.Base(repoURL), ".git")
+	repoName := strings.TrimSuffix(filepath.Base(sshURL), ".git")
 	tempClone := filepath.Join(filepath.Dir(configDir), repoName)
 	osRemoveAll(tempClone)
 
 	fmt.Printf("  Cloning to %s ...\n", configDir)
-	if !runCmd([]string{"git", "clone", repoURL, tempClone}, CmdOpts{}).OK() {
-		errLog("Neovim configuration clone failed")
-		return
+	if !runCmd([]string{"git", "clone", sshURL, tempClone}, CmdOpts{}).OK() {
+		fmt.Printf("  SSH clone failed; falling back to HTTPS (%s) ...\n", httpsURL)
+		osRemoveAll(tempClone)
+		if !runCmd([]string{"git", "clone", httpsURL, tempClone}, CmdOpts{}).OK() {
+			errLog("Neovim configuration clone failed")
+			return
+		}
 	}
 	if tempClone != configDir {
 		fmt.Printf("  Renaming %s to %s ...\n", filepath.Base(tempClone), filepath.Base(configDir))
@@ -498,8 +503,14 @@ func installPlaywright() {
 		errLog("playwright installation failed")
 		return
 	}
-	fmt.Println("  Installing Playwright browsers with dependencies ...")
-	if !runShell(`bash -c "source ~/.nvm/nvm.sh && source ~/.bashrc 2>/dev/null; pnpx playwright install --with-deps"`, CmdOpts{}).OK() {
+	installCmd := "pnpx playwright install"
+	if pkgMgr == "apt-get" {
+		fmt.Println("  Installing Playwright browsers with dependencies ...")
+		installCmd += " --with-deps"
+	} else {
+		fmt.Println("  Installing Playwright browsers ...")
+	}
+	if !runShell(fmt.Sprintf(`bash -c "source ~/.nvm/nvm.sh && source ~/.bashrc 2>/dev/null; %s"`, installCmd), CmdOpts{}).OK() {
 		errLog("playwright browser installation failed")
 	}
 }

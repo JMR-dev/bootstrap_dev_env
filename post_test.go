@@ -231,6 +231,63 @@ func TestCloneNvimConfig(t *testing.T) {
 	}
 }
 
+func TestCloneNvimConfigSSHFallback(t *testing.T) {
+	defer resetMocks()
+
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist // nothing exists
+	}
+
+	var runCmdCalls [][]string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdCalls = append(runCmdCalls, argv)
+		// First clone (SSH) fails; second (HTTPS) succeeds.
+		if len(runCmdCalls) == 1 {
+			return CmdResult{ExitCode: 1}
+		}
+		return CmdResult{ExitCode: 0}
+	}
+
+	cloneNvimConfig()
+
+	if len(runCmdCalls) != 2 {
+		t.Fatalf("expected 2 git clone attempts (SSH then HTTPS), got: %v", runCmdCalls)
+	}
+	if !strings.HasPrefix(runCmdCalls[0][2], "git@github.com:") {
+		t.Errorf("expected first attempt to use SSH URL, got: %v", runCmdCalls[0])
+	}
+	if !strings.HasPrefix(runCmdCalls[1][2], "https://github.com/") {
+		t.Errorf("expected fallback to use HTTPS URL, got: %v", runCmdCalls[1])
+	}
+	if hasErrors() {
+		t.Errorf("expected no errors logged when HTTPS fallback succeeds")
+	}
+}
+
+func TestCloneNvimConfigBothFail(t *testing.T) {
+	defer resetMocks()
+
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		return CmdResult{ExitCode: 1}
+	}
+
+	cloneNvimConfig()
+
+	if !hasErrors() {
+		t.Errorf("expected error logged when both SSH and HTTPS clones fail")
+	}
+}
+
 func TestCheckAndSetupSSH(t *testing.T) {
 	defer resetMocks()
 
@@ -651,8 +708,9 @@ func TestInstallPlaywright(t *testing.T) {
 	}
 	installPlaywright() // should log error and return
 
-	// Happy path
+	// Happy path on apt-get: should pass --with-deps
 	resetMocks()
+	pkgMgr = "apt-get"
 	osStat = func(name string) (os.FileInfo, error) {
 		return nil, nil // nvm exists
 	}
@@ -676,7 +734,32 @@ func TestInstallPlaywright(t *testing.T) {
 		t.Errorf("expected pnpm add -g playwright, got: %v", runShellCmds)
 	}
 	if !hasPlaywrightBrowsers {
-		t.Errorf("expected pnpx playwright install --with-deps, got: %v", runShellCmds)
+		t.Errorf("expected pnpx playwright install --with-deps on apt-get, got: %v", runShellCmds)
+	}
+
+	// Happy path on non-apt (dnf/pacman/brew): must NOT pass --with-deps
+	resetMocks()
+	pkgMgr = "dnf"
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, nil
+	}
+	var dnfShellCmds []string
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		dnfShellCmds = append(dnfShellCmds, cmd)
+		return CmdResult{ExitCode: 0}
+	}
+	installPlaywright()
+	hasPlainBrowsers := false
+	for _, cmd := range dnfShellCmds {
+		if strings.Contains(cmd, "--with-deps") {
+			t.Errorf("did not expect --with-deps on dnf, got: %v", dnfShellCmds)
+		}
+		if strings.Contains(cmd, "pnpx playwright install") {
+			hasPlainBrowsers = true
+		}
+	}
+	if !hasPlainBrowsers {
+		t.Errorf("expected pnpx playwright install (without --with-deps) on dnf, got: %v", dnfShellCmds)
 	}
 
 	// Failure path: pnpm install fails, browser install should be skipped
