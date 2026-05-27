@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 func main() {
@@ -104,19 +106,11 @@ func runMain(args []string) {
 
 	doFlatpak := (*only == "" || *only == "flatpak") && *gui && !isMacOS
 
-	var sysCheck systemCheckResult
-	var flatCheck flatpakCheckResult
-	var custCheck customCheckResult
-
-	if *only == "" || *only == "system" {
-		sysCheck = checkSystemPackages(systemPkgs)
-	}
-	if doFlatpak {
-		flatCheck = checkFlatpakPackages(flatpakPkgs)
-	}
-	if *only == "" || *only == "custom" {
-		custCheck = checkCustomPackages(customPtrs)
-	}
+	sysCheck, flatCheck, custCheck := checkAllInParallel(
+		*only == "" || *only == "system", systemPkgs,
+		doFlatpak, flatpakPkgs,
+		*only == "" || *only == "custom", customPtrs,
+	)
 
 	total := printCheckSummary(sysCheck, flatCheck, custCheck, *only)
 
@@ -133,6 +127,7 @@ func runMain(args []string) {
 	}
 
 	checkSudo()
+	promptGitHubToken()
 
 	if *only == "" || *only == "system" {
 		installSystemPackages(sysCheck.toInstallRegular, sysCheck.toInstallSpecial)
@@ -182,6 +177,39 @@ func runMain(args []string) {
 			runShell(fmt.Sprintf("zsh -c 'source %s'", zshrc), CmdOpts{})
 		}
 	}
+}
+
+// promptGitHubToken asks the user if they want to supply a GitHub token
+// after they've authenticated sudo. With a token, our HTTP-bound worker
+// pool uncaps from the conservative 8-worker default up to runtime.NumCPU(),
+// because authenticated GitHub requests get 5000/hour instead of the
+// unauthenticated 60/hour. A token in the environment is honored without
+// prompting. Token input is read with echo off via golang.org/x/term so it
+// doesn't leak into terminal scrollback or recorded sessions.
+func promptGitHubToken() {
+	if existing := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); existing != "" {
+		githubTokenSet = true
+		fmt.Printf("[GitHub] GITHUB_TOKEN found in environment — HTTP workers uncapped to %d.\n", cpuWorkers())
+		return
+	}
+	if !askYN("\n[GitHub] Provide a GitHub token to uncap HTTP workers from 8 to your CPU count? [y/N] ") {
+		return
+	}
+	fmt.Print("  Paste token (input hidden): ")
+	tokenBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		warn(fmt.Sprintf("could not read token: %v — continuing without uncap", err))
+		return
+	}
+	token := strings.TrimSpace(string(tokenBytes))
+	if token == "" {
+		fmt.Println("  No token provided — keeping the conservative HTTP worker cap.")
+		return
+	}
+	os.Setenv("GITHUB_TOKEN", token)
+	githubTokenSet = true
+	fmt.Printf("  Token accepted — HTTP workers uncapped to %d.\n", cpuWorkers())
 }
 
 func checkSudo() {

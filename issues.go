@@ -26,7 +26,15 @@ var (
 func logIssue(level, msg string) {
 	issuesMu.Lock()
 	defer issuesMu.Unlock()
-	fmt.Fprintf(issueLogWriter, "  [%s] %s\n", level, msg)
+	// Route the human-facing line through the active task's buffer when
+	// running inside a parallel worker, so concurrent warns/errLogs don't
+	// interleave on stdout. The structured issue (added to the slice below)
+	// still flows into the global issues log used by writeRunLog.
+	if t := currentTask(); t != nil {
+		t.Printf("[%s] %s\n", level, msg)
+	} else {
+		fmt.Fprintf(issueLogWriter, "  [%s] %s\n", level, msg)
+	}
 	issues = append(issues, fmt.Sprintf("[%s] %s", level, msg))
 	if level == "ERROR" {
 		errorCount++

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -18,6 +19,14 @@ import (
 const defaultSubprocessTimeout = 30 * time.Minute
 
 // CmdOpts captures the optional knobs on runCmd / runShell.
+//
+// Out, when non-nil, switches the call into "captured-routed" mode: stdout
+// and stderr are buffered, then the "$ cmd" echo, captured stdout, and
+// captured stderr are written to Out in order. Capture is forced true.
+// This is how parallel workers route output into per-task buffers without
+// interleaving on os.Stdout. When Out is nil (default) the call streams to
+// os.Stdout exactly as before, preserving the live-tail behavior used by
+// the sequential code paths.
 type CmdOpts struct {
 	AsSudo  bool
 	Check   bool // exit on failure (kept for parity but treated as advisory — we return the error instead)
@@ -25,6 +34,7 @@ type CmdOpts struct {
 	Capture bool
 	Cwd     string
 	Timeout time.Duration // zero = defaultSubprocessTimeout
+	Out     io.Writer     // optional sink for echo + captured streams
 }
 
 // CmdResult holds the outcome of a subprocess invocation.
@@ -45,7 +55,12 @@ func runCmdReal(argv []string, opts CmdOpts) CmdResult {
 	if opts.AsSudo && os.Geteuid() != 0 {
 		argv = append([]string{"sudo"}, argv...)
 	}
-	fmt.Printf("  $ %s\n", strings.Join(argv, " "))
+	if opts.Out != nil {
+		fmt.Fprintf(opts.Out, "$ %s\n", strings.Join(argv, " "))
+		opts.Capture = true
+	} else {
+		fmt.Printf("  $ %s\n", strings.Join(argv, " "))
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
@@ -69,6 +84,10 @@ func runCmdReal(argv []string, opts CmdOpts) CmdResult {
 
 	err := cmd.Run()
 	res := CmdResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	if opts.Out != nil {
+		writeToOut(opts.Out, res.Stdout)
+		writeToOut(opts.Out, res.Stderr)
+	}
 
 	if ctx.Err() == context.DeadlineExceeded {
 		warn(fmt.Sprintf("%q timed out after %s", argv[0], opts.Timeout))
@@ -96,7 +115,12 @@ func runShellReal(cmd string, opts CmdOpts) CmdResult {
 	if opts.Timeout == 0 {
 		opts.Timeout = defaultSubprocessTimeout
 	}
-	fmt.Printf("  $ %s\n", cmd)
+	if opts.Out != nil {
+		fmt.Fprintf(opts.Out, "$ %s\n", cmd)
+		opts.Capture = true
+	} else {
+		fmt.Printf("  $ %s\n", cmd)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
@@ -120,6 +144,10 @@ func runShellReal(cmd string, opts CmdOpts) CmdResult {
 
 	err := c.Run()
 	res := CmdResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+	if opts.Out != nil {
+		writeToOut(opts.Out, res.Stdout)
+		writeToOut(opts.Out, res.Stderr)
+	}
 
 	if ctx.Err() == context.DeadlineExceeded {
 		warn(fmt.Sprintf("shell command timed out after %s", opts.Timeout))
@@ -139,6 +167,19 @@ func runShellReal(cmd string, opts CmdOpts) CmdResult {
 		res.Err = err
 	}
 	return res
+}
+
+// writeToOut writes data to w, appending a trailing newline if data is
+// non-empty and doesn't already end with one. Used by runCmd / runShell to
+// keep captured stdout/stderr neatly separated when routed to a task buffer.
+func writeToOut(w io.Writer, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	_, _ = w.Write(data)
+	if data[len(data)-1] != '\n' {
+		_, _ = w.Write([]byte{'\n'})
+	}
 }
 
 // hasCmdReal is shutil.which() — returns true if name resolves on PATH.

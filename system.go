@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Special packages: installed outside the regular package manager because
@@ -393,16 +394,60 @@ func pkgInstall(pkg string) CmdResult {
 	}
 }
 
+// pkgInstallMany installs all named packages in a single invocation of the
+// host package manager. This is dramatically faster than per-package install
+// loops because apt/dnf/pacman amortize metadata refresh, dependency
+// resolution, and (most importantly) only acquire the install lock once.
+//
+// On batch failure we fall back to per-package installs so callers can
+// continue to report which specific packages failed via errLog. brew gets
+// each formula in parallel goroutines (it tolerates concurrent invocations
+// when packages don't share build dependencies; cask installs go through
+// the same path).
+func pkgInstallMany(pkgs []string) (failed []string) {
+	if len(pkgs) == 0 {
+		return nil
+	}
+	if pkgMgr == "brew" {
+		var mu sync.Mutex
+		parallelDo(pkgs, cpuWorkers(), func(_ int, p string) {
+			if !pkgInstall(p).OK() {
+				mu.Lock()
+				failed = append(failed, p)
+				mu.Unlock()
+			}
+		})
+		return failed
+	}
+	var argv []string
+	switch pkgMgr {
+	case "pacman":
+		argv = append([]string{"pacman", "-S", "--noconfirm", "--needed"}, pkgs...)
+	default:
+		argv = append([]string{pkgMgr, "install", "-y"}, pkgs...)
+	}
+	if runCmd(argv, CmdOpts{AsSudo: true}).OK() {
+		return nil
+	}
+	// Batch failed — retry per-package so we can report exactly which
+	// packages broke. Slower, but only happens on the error path.
+	warn(fmt.Sprintf("Batched install failed; retrying %d packages individually to isolate failures ...", len(pkgs)))
+	for _, p := range pkgs {
+		if !pkgInstall(p).OK() {
+			failed = append(failed, p)
+		}
+	}
+	return failed
+}
+
 // installSystemPackages installs the regular + special package lists.
 func installSystemPackages(regular, special []string) {
 	fmt.Println("\n=== System Packages ===")
 
 	if pkgMgr == "brew" {
-		for _, pkg := range regular {
-			res := pkgInstall(pkg)
-			if !res.OK() {
-				errLog(fmt.Sprintf("System package failed to install: %s", pkg))
-			}
+		failed := pkgInstallMany(regular)
+		for _, p := range failed {
+			errLog(fmt.Sprintf("System package failed to install: %s", p))
 		}
 		// No special packages on macOS — brew covers all of them.
 		return
@@ -420,11 +465,9 @@ func installSystemPackages(regular, special []string) {
 		}
 	}
 
-	for _, pkg := range regular {
-		res := pkgInstall(pkg)
-		if !res.OK() {
-			errLog(fmt.Sprintf("System package failed to install: %s", pkg))
-		}
+	failed := pkgInstallMany(regular)
+	for _, p := range failed {
+		errLog(fmt.Sprintf("System package failed to install: %s", p))
 	}
 
 	if len(special) > 0 {

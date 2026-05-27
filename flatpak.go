@@ -23,6 +23,19 @@ func installFlatpakPackages(toInstall []string) {
 		"https://dl.flathub.org/repo/flathub.flatpakrepo",
 	}, CmdOpts{AsSudo: true})
 
+	if len(toInstall) == 0 {
+		return
+	}
+
+	// Single batched install — flatpak supports multiple refs per invocation
+	// and resolves them concurrently internally. Fall back to per-package
+	// installs on failure so callers see exactly which IDs broke.
+	argv := append([]string{"flatpak", "install", "--noninteractive", "flathub"}, toInstall...)
+	fmt.Printf("\n  Installing %d Flatpak(s) in one batch ...\n", len(toInstall))
+	if runCmd(argv, CmdOpts{}).OK() {
+		return
+	}
+	warn("Batched flatpak install failed; retrying per-package to isolate failures ...")
 	for _, pkgID := range toInstall {
 		fmt.Printf("\n  Installing %s ...\n", pkgID)
 		res := runCmd([]string{"flatpak", "install", "--noninteractive", "flathub", pkgID}, CmdOpts{})
