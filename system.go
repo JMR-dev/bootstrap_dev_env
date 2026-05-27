@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 // Special packages: installed outside the regular package manager because
@@ -396,28 +395,22 @@ func pkgInstall(pkg string) CmdResult {
 
 // pkgInstallMany installs all named packages in a single invocation of the
 // host package manager. This is dramatically faster than per-package install
-// loops because apt/dnf/pacman amortize metadata refresh, dependency
+// loops because apt/dnf/pacman/brew amortize metadata refresh, dependency
 // resolution, and (most importantly) only acquire the install lock once.
 //
 // On batch failure we fall back to per-package installs so callers can
-// continue to report which specific packages failed via errLog. brew gets
-// each formula in parallel goroutines (it tolerates concurrent invocations
-// when packages don't share build dependencies; cask installs go through
-// the same path).
+// continue to report which specific packages failed via errLog. brew is
+// split into formula vs cask batches because `--cask` is mutually exclusive
+// with formula installs in one invocation. We deliberately do NOT run brew
+// invocations in parallel — brew acquires per-Cellar locks on transitive
+// dependencies (cmake, ninja, libsodium, etc.), and concurrent invocations
+// that both pull in the same dep abort with "process has already locked".
 func pkgInstallMany(pkgs []string) (failed []string) {
 	if len(pkgs) == 0 {
 		return nil
 	}
 	if pkgMgr == "brew" {
-		var mu sync.Mutex
-		parallelDo(pkgs, cpuWorkers(), func(_ int, p string) {
-			if !pkgInstall(p).OK() {
-				mu.Lock()
-				failed = append(failed, p)
-				mu.Unlock()
-			}
-		})
-		return failed
+		return brewInstallMany(pkgs)
 	}
 	var argv []string
 	switch pkgMgr {
@@ -437,6 +430,44 @@ func pkgInstallMany(pkgs []string) (failed []string) {
 			failed = append(failed, p)
 		}
 	}
+	return failed
+}
+
+// brewInstallMany installs pkgs via brew, batching formulas and casks into
+// two single invocations (`brew install f1 f2 …` and `brew install --cask
+// c1 c2 …`). Brew resolves and parallelizes the internal dep graph itself,
+// so a single batched call is both faster and lock-safe — multiple
+// concurrent `brew install` processes deadlock on shared deps. On batch
+// failure we retry per-package serially to identify which specific package
+// broke.
+func brewInstallMany(pkgs []string) (failed []string) {
+	var formulas, casks []string
+	for _, p := range pkgs {
+		if brewCasks[p] {
+			casks = append(casks, p)
+		} else {
+			formulas = append(formulas, p)
+		}
+	}
+	tryBatch := func(label string, names []string, extra ...string) (batchFailed []string) {
+		if len(names) == 0 {
+			return nil
+		}
+		argv := append([]string{"brew", "install"}, extra...)
+		argv = append(argv, names...)
+		if runCmd(argv, CmdOpts{}).OK() {
+			return nil
+		}
+		warn(fmt.Sprintf("Batched brew %s install failed; retrying %d packages individually ...", label, len(names)))
+		for _, p := range names {
+			if !pkgInstall(p).OK() {
+				batchFailed = append(batchFailed, p)
+			}
+		}
+		return batchFailed
+	}
+	failed = append(failed, tryBatch("formula", formulas)...)
+	failed = append(failed, tryBatch("cask", casks, "--cask")...)
 	return failed
 }
 

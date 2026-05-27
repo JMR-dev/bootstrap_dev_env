@@ -128,19 +128,78 @@ func TestPkgInstallManyEmpty(t *testing.T) {
 	}
 }
 
-// TestPkgInstallManyBrew uses parallel per-package install (no batching at
-// the CLI level because brew formula installs may have their own preferences).
+// TestPkgInstallManyBrew verifies that brew is batched into a single
+// `brew install f1 f2 …` call (formulas only — no casks in this test).
+// Parallel brew calls would deadlock on shared transitive-dep locks
+// (cmake, ninja, libsodium, …), so we deliberately batch and serialize.
 func TestPkgInstallManyBrew(t *testing.T) {
 	defer resetMocks()
 	pkgMgr = "brew"
 
 	var mu sync.Mutex
-	var seen []string
+	var calls [][]string
 	runCmd = func(argv []string, _ CmdOpts) CmdResult {
 		mu.Lock()
-		// last arg is the package name for `brew install <pkg>`
-		seen = append(seen, argv[len(argv)-1])
+		calls = append(calls, append([]string(nil), argv...))
 		mu.Unlock()
+		return CmdResult{ExitCode: 0}
+	}
+
+	if failed := pkgInstallMany([]string{"git", "vim", "curl"}); len(failed) != 0 {
+		t.Errorf("expected no failures, got %v", failed)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 batched brew call, got %d: %v", len(calls), calls)
+	}
+	got := strings.Join(calls[0], " ")
+	if got != "brew install git vim curl" {
+		t.Errorf("expected 'brew install git vim curl', got %q", got)
+	}
+}
+
+// TestPkgInstallManyBrewSplitCasks verifies that casks and formulas are
+// emitted in separate calls (because --cask is mutually exclusive with
+// formula installs in one invocation).
+func TestPkgInstallManyBrewSplitCasks(t *testing.T) {
+	defer resetMocks()
+	pkgMgr = "brew"
+
+	var calls [][]string
+	runCmd = func(argv []string, _ CmdOpts) CmdResult {
+		calls = append(calls, append([]string(nil), argv...))
+		return CmdResult{ExitCode: 0}
+	}
+
+	// "docker" is in brewCasks; the rest are formulas.
+	pkgInstallMany([]string{"git", "docker", "vim"})
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls (1 formula batch + 1 cask batch), got %d: %v", len(calls), calls)
+	}
+	formula := strings.Join(calls[0], " ")
+	cask := strings.Join(calls[1], " ")
+	if formula != "brew install git vim" {
+		t.Errorf("expected 'brew install git vim', got %q", formula)
+	}
+	if cask != "brew install --cask docker" {
+		t.Errorf("expected 'brew install --cask docker', got %q", cask)
+	}
+}
+
+// TestPkgInstallManyBrewFallback: batched formula install fails; we retry
+// per-package and identify the broken one.
+func TestPkgInstallManyBrewFallback(t *testing.T) {
+	defer resetMocks()
+	pkgMgr = "brew"
+
+	calls := 0
+	runCmd = func(argv []string, _ CmdOpts) CmdResult {
+		calls++
+		// First call is the batch — fail it.
+		if calls == 1 {
+			return CmdResult{ExitCode: 1}
+		}
+		// Per-package retries: only "broken" fails.
 		if argv[len(argv)-1] == "broken" {
 			return CmdResult{ExitCode: 1}
 		}
@@ -151,8 +210,9 @@ func TestPkgInstallManyBrew(t *testing.T) {
 	if len(failed) != 1 || failed[0] != "broken" {
 		t.Errorf("expected only 'broken' to fail, got %v", failed)
 	}
-	if len(seen) != 3 {
-		t.Errorf("expected 3 brew calls (one per pkg), got %d: %v", len(seen), seen)
+	// 1 batch + 3 per-package retries = 4 calls.
+	if calls != 4 {
+		t.Errorf("expected 4 total calls, got %d", calls)
 	}
 }
 
