@@ -393,16 +393,92 @@ func pkgInstall(pkg string) CmdResult {
 	}
 }
 
+// pkgInstallMany installs all named packages in a single invocation of the
+// host package manager. This is dramatically faster than per-package install
+// loops because apt/dnf/pacman/brew amortize metadata refresh, dependency
+// resolution, and (most importantly) only acquire the install lock once.
+//
+// On batch failure we fall back to per-package installs so callers can
+// continue to report which specific packages failed via errLog. brew is
+// split into formula vs cask batches because `--cask` is mutually exclusive
+// with formula installs in one invocation. We deliberately do NOT run brew
+// invocations in parallel — brew acquires per-Cellar locks on transitive
+// dependencies (cmake, ninja, libsodium, etc.), and concurrent invocations
+// that both pull in the same dep abort with "process has already locked".
+func pkgInstallMany(pkgs []string) (failed []string) {
+	if len(pkgs) == 0 {
+		return nil
+	}
+	if pkgMgr == "brew" {
+		return brewInstallMany(pkgs)
+	}
+	var argv []string
+	switch pkgMgr {
+	case "pacman":
+		argv = append([]string{"pacman", "-S", "--noconfirm", "--needed"}, pkgs...)
+	default:
+		argv = append([]string{pkgMgr, "install", "-y"}, pkgs...)
+	}
+	if runCmd(argv, CmdOpts{AsSudo: true}).OK() {
+		return nil
+	}
+	// Batch failed — retry per-package so we can report exactly which
+	// packages broke. Slower, but only happens on the error path.
+	warn(fmt.Sprintf("Batched install failed; retrying %d packages individually to isolate failures ...", len(pkgs)))
+	for _, p := range pkgs {
+		if !pkgInstall(p).OK() {
+			failed = append(failed, p)
+		}
+	}
+	return failed
+}
+
+// brewInstallMany installs pkgs via brew, batching formulas and casks into
+// two single invocations (`brew install f1 f2 …` and `brew install --cask
+// c1 c2 …`). Brew resolves and parallelizes the internal dep graph itself,
+// so a single batched call is both faster and lock-safe — multiple
+// concurrent `brew install` processes deadlock on shared deps. On batch
+// failure we retry per-package serially to identify which specific package
+// broke.
+func brewInstallMany(pkgs []string) (failed []string) {
+	var formulas, casks []string
+	for _, p := range pkgs {
+		if brewCasks[p] {
+			casks = append(casks, p)
+		} else {
+			formulas = append(formulas, p)
+		}
+	}
+	tryBatch := func(label string, names []string, extra ...string) (batchFailed []string) {
+		if len(names) == 0 {
+			return nil
+		}
+		argv := append([]string{"brew", "install"}, extra...)
+		argv = append(argv, names...)
+		if runCmd(argv, CmdOpts{}).OK() {
+			return nil
+		}
+		warn(fmt.Sprintf("Batched brew %s install failed; retrying %d packages individually ...", label, len(names)))
+		for _, p := range names {
+			if !pkgInstall(p).OK() {
+				batchFailed = append(batchFailed, p)
+			}
+		}
+		return batchFailed
+	}
+	failed = append(failed, tryBatch("formula", formulas)...)
+	failed = append(failed, tryBatch("cask", casks, "--cask")...)
+	return failed
+}
+
 // installSystemPackages installs the regular + special package lists.
 func installSystemPackages(regular, special []string) {
 	fmt.Println("\n=== System Packages ===")
 
 	if pkgMgr == "brew" {
-		for _, pkg := range regular {
-			res := pkgInstall(pkg)
-			if !res.OK() {
-				errLog(fmt.Sprintf("System package failed to install: %s", pkg))
-			}
+		failed := pkgInstallMany(regular)
+		for _, p := range failed {
+			errLog(fmt.Sprintf("System package failed to install: %s", p))
 		}
 		// No special packages on macOS — brew covers all of them.
 		return
@@ -420,11 +496,9 @@ func installSystemPackages(regular, special []string) {
 		}
 	}
 
-	for _, pkg := range regular {
-		res := pkgInstall(pkg)
-		if !res.OK() {
-			errLog(fmt.Sprintf("System package failed to install: %s", pkg))
-		}
+	failed := pkgInstallMany(regular)
+	for _, p := range failed {
+		errLog(fmt.Sprintf("System package failed to install: %s", p))
 	}
 
 	if len(special) > 0 {

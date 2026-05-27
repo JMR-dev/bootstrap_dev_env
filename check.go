@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 type systemCheckResult struct {
@@ -33,6 +34,28 @@ type customStatus struct {
 	path string
 }
 
+// parallelPartition runs check(item) over items concurrently (using the
+// configured cpuWorkers pool) and returns the items where check returned
+// true first, then those where it returned false — both in input order.
+// We preserve input order so the displayed package lists stay stable.
+func parallelPartition[T any](items []T, check func(T) bool) (truthy, falsy []T) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	results := make([]bool, len(items))
+	parallelDo(items, cpuWorkers(), func(i int, item T) {
+		results[i] = check(item)
+	})
+	for i, item := range items {
+		if results[i] {
+			truthy = append(truthy, item)
+		} else {
+			falsy = append(falsy, item)
+		}
+	}
+	return
+}
+
 func checkSystemPackages(names []string) systemCheckResult {
 	overrides := packageOverrides[pkgMgr]
 	resolved, skipped := resolveSystemPkgs(names)
@@ -54,22 +77,8 @@ func checkSystemPackages(names []string) systemCheckResult {
 		}
 	}
 
-	var toR, alreadyR []string
-	for _, p := range regular {
-		if isSystemPkgInstalled(p) {
-			alreadyR = append(alreadyR, p)
-		} else {
-			toR = append(toR, p)
-		}
-	}
-	var toS, alreadyS []string
-	for _, p := range special {
-		if isSpecialPkgInstalled(p) {
-			alreadyS = append(alreadyS, p)
-		} else {
-			toS = append(toS, p)
-		}
-	}
+	alreadyR, toR := parallelPartition(regular, isSystemPkgInstalled)
+	alreadyS, toS := parallelPartition(special, isSpecialPkgInstalled)
 	return systemCheckResult{
 		toInstallRegular: toR,
 		toInstallSpecial: toS,
@@ -80,29 +89,67 @@ func checkSystemPackages(names []string) systemCheckResult {
 }
 
 func checkFlatpakPackages(ids []string) flatpakCheckResult {
-	var to, already []string
-	for _, p := range ids {
-		if isFlatpakInstalled(p) {
-			already = append(already, p)
-		} else {
-			to = append(to, p)
-		}
-	}
+	already, to := parallelPartition(ids, isFlatpakInstalled)
 	return flatpakCheckResult{toInstall: to, alreadyInstalled: already}
 }
 
 func checkCustomPackages(pkgs []*CustomPackage) customCheckResult {
+	type result struct {
+		installed bool
+		path      string
+	}
+	results := make([]result, len(pkgs))
+	parallelDo(pkgs, cpuWorkers(), func(i int, p *CustomPackage) {
+		installed, path := isCustomPkgInstalled(p)
+		results[i] = result{installed: installed, path: path}
+	})
 	var to []*CustomPackage
 	var already []customStatus
-	for _, p := range pkgs {
-		installed, path := isCustomPkgInstalled(p)
-		if installed {
-			already = append(already, customStatus{pkg: p, path: path})
+	for i, p := range pkgs {
+		if results[i].installed {
+			already = append(already, customStatus{pkg: p, path: results[i].path})
 		} else {
 			to = append(to, p)
 		}
 	}
 	return customCheckResult{toInstall: to, alreadyInstalled: already}
+}
+
+// checkAllInParallel runs the three check passes concurrently. The caller
+// must still gate which checks to run via *only; we accept already-prepared
+// inputs and skip when the corresponding slice/conditional indicates no work.
+func checkAllInParallel(
+	runSys bool, sysPkgs []string,
+	runFlat bool, flatPkgs []string,
+	runCust bool, customPkgs []*CustomPackage,
+) (systemCheckResult, flatpakCheckResult, customCheckResult) {
+	var sys systemCheckResult
+	var flat flatpakCheckResult
+	var cust customCheckResult
+	var wg sync.WaitGroup
+	if runSys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sys = checkSystemPackages(sysPkgs)
+		}()
+	}
+	if runFlat {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			flat = checkFlatpakPackages(flatPkgs)
+		}()
+	}
+	if runCust {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cust = checkCustomPackages(customPkgs)
+		}()
+	}
+	wg.Wait()
+	return sys, flat, cust
 }
 
 func fmtList(items []string, limit int) string {

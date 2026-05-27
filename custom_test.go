@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -253,9 +254,14 @@ func TestInstallCustomPackages(t *testing.T) {
 		return true
 	}
 
-	var runCmdCalls [][]string
+	var (
+		runCmdMu    sync.Mutex
+		runCmdCalls [][]string
+	)
 	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdMu.Lock()
 		runCmdCalls = append(runCmdCalls, argv)
+		runCmdMu.Unlock()
 		return CmdResult{ExitCode: 0}
 	}
 
@@ -275,6 +281,8 @@ func TestInstallCustomPackages(t *testing.T) {
 	}
 
 	installCustomPackages(pkgs)
+	runCmdMu.Lock()
+	defer runCmdMu.Unlock()
 
 	// Verify that we executed tar/mv/ln etc commands via runCmd
 	hasTar := false

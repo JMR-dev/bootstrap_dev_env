@@ -154,7 +154,7 @@ func verifyArchive(archive string, pkg *CustomPackage) bool {
 			errLog(fmt.Sprintf("SHA256 mismatch for %s: expected %s, got %s", pkg.Name, expected, actual))
 			return false
 		}
-		fmt.Println("  SHA256 OK")
+		taskPrintln("  SHA256 OK")
 		return true
 	}
 	if sigURL := pkg.resolveSHA256URL(); sigURL != "" {
@@ -170,11 +170,11 @@ func verifyArchive(archive string, pkg *CustomPackage) bool {
 		if pkg.MinisignKey != "" {
 			cmd = append(cmd, "-P", pkg.MinisignKey)
 		}
-		if !runCmd(cmd, CmdOpts{}).OK() {
+		if !runCmd(cmd, CmdOpts{Out: taskOut()}).OK() {
 			errLog(fmt.Sprintf("minisign verification failed for %s", pkg.Name))
 			return false
 		}
-		fmt.Println("  minisign OK")
+		taskPrintln("  minisign OK")
 	}
 	return true
 }
@@ -198,18 +198,20 @@ func urlArchOK(pkg *CustomPackage) bool {
 // ── per-package install handlers ────────────────────────────────────────
 
 func installGo(archive string) {
+	out := taskOut()
 	goRoot := "/usr/local/go"
 	if _, err := osStat(goRoot); err == nil {
-		fmt.Printf("  Removing existing Go at %s ...\n", goRoot)
-		runCmd([]string{"rm", "-rf", goRoot}, CmdOpts{AsSudo: true})
+		taskPrintf("  Removing existing Go at %s ...\n", goRoot)
+		runCmd([]string{"rm", "-rf", goRoot}, CmdOpts{AsSudo: true, Out: out})
 	}
-	runCmd([]string{"tar", "-C", "/usr/local", "-xzf", archive}, CmdOpts{AsSudo: true})
+	runCmd([]string{"tar", "-C", "/usr/local", "-xzf", archive}, CmdOpts{AsSudo: true, Out: out})
 	appendProfileLine("local_go", "export PATH=$PATH:/usr/local/go/bin")
-	fmt.Printf("  Go installed to %s\n", goRoot)
+	taskPrintf("  Go installed to %s\n", goRoot)
 }
 
 func installFirecracker(archive, tmp string) {
-	if !runCmd([]string{"tar", "-C", tmp, "-xzf", archive}, CmdOpts{}).OK() {
+	out := taskOut()
+	if !runCmd([]string{"tar", "-C", tmp, "-xzf", archive}, CmdOpts{Out: out}).OK() {
 		errLog("firecracker tar extraction failed")
 		return
 	}
@@ -239,33 +241,35 @@ func installFirecracker(archive, tmp string) {
 		return
 	}
 	dest := "/usr/local/bin/firecracker"
-	runCmd([]string{"cp", binary, dest}, CmdOpts{AsSudo: true})
-	runCmd([]string{"chmod", "755", dest}, CmdOpts{AsSudo: true})
-	fmt.Printf("  firecracker installed to %s\n", dest)
+	runCmd([]string{"cp", binary, dest}, CmdOpts{AsSudo: true, Out: out})
+	runCmd([]string{"chmod", "755", dest}, CmdOpts{AsSudo: true, Out: out})
+	taskPrintf("  firecracker installed to %s\n", dest)
 }
 
 func installZig(pkg *CustomPackage, archive string) {
+	out := taskOut()
 	parent := "/usr/local"
 	zigDir := filepath.Join(parent, "zig-"+pkg.Version)
 	if _, err := osStat(zigDir); err == nil {
-		runCmd([]string{"rm", "-rf", zigDir}, CmdOpts{AsSudo: true})
+		runCmd([]string{"rm", "-rf", zigDir}, CmdOpts{AsSudo: true, Out: out})
 	}
-	runCmd([]string{"tar", "-C", parent, "-xJf", archive}, CmdOpts{AsSudo: true})
+	runCmd([]string{"tar", "-C", parent, "-xJf", archive}, CmdOpts{AsSudo: true, Out: out})
 
 	pattern := filepath.Join(parent, fmt.Sprintf("zig-%s-%s*", archName, osZig[osName]))
 	matches, _ := filepath.Glob(pattern)
 	for _, m := range matches {
 		if m != zigDir {
-			runCmd([]string{"mv", m, zigDir}, CmdOpts{AsSudo: true})
+			runCmd([]string{"mv", m, zigDir}, CmdOpts{AsSudo: true, Out: out})
 			break
 		}
 	}
 	symlink := "/usr/local/bin/zig"
-	runCmd([]string{"ln", "-sf", filepath.Join(zigDir, "zig"), symlink}, CmdOpts{AsSudo: true})
-	fmt.Printf("  Zig installed to %s, symlinked at %s\n", zigDir, symlink)
+	runCmd([]string{"ln", "-sf", filepath.Join(zigDir, "zig"), symlink}, CmdOpts{AsSudo: true, Out: out})
+	taskPrintf("  Zig installed to %s, symlinked at %s\n", zigDir, symlink)
 }
 
 func installNeovim(_ *CustomPackage, tmp string) {
+	out := taskOut()
 	var rel ghRelease
 	if !fetchJSON("https://api.github.com/repos/neovim/neovim/releases/latest", &rel) {
 		return
@@ -303,18 +307,18 @@ func installNeovim(_ *CustomPackage, tmp string) {
 		errLog(fmt.Sprintf("Neovim SHA256 mismatch: expected %s, got %s", expected, actual))
 		return
 	}
-	fmt.Println("  SHA256 OK")
+	taskPrintln("  SHA256 OK")
 
 	installDir := fmt.Sprintf("/opt/nvim-%s-%s", osTok, archTok)
-	fmt.Println("  Extracting Neovim to /opt ...")
-	runCmd([]string{"mkdir", "-p", "/opt"}, CmdOpts{AsSudo: true})
-	runCmd([]string{"rm", "-rf", installDir}, CmdOpts{AsSudo: true})
-	runCmd([]string{"tar", "-C", "/opt", "-xzf", dest}, CmdOpts{AsSudo: true})
+	taskPrintln("  Extracting Neovim to /opt ...")
+	runCmd([]string{"mkdir", "-p", "/opt"}, CmdOpts{AsSudo: true, Out: out})
+	runCmd([]string{"rm", "-rf", installDir}, CmdOpts{AsSudo: true, Out: out})
+	runCmd([]string{"tar", "-C", "/opt", "-xzf", dest}, CmdOpts{AsSudo: true, Out: out})
 
-	runCmd([]string{"mkdir", "-p", "/usr/local/bin"}, CmdOpts{AsSudo: true})
+	runCmd([]string{"mkdir", "-p", "/usr/local/bin"}, CmdOpts{AsSudo: true, Out: out})
 	symlink := "/usr/local/bin/nvim"
-	runCmd([]string{"ln", "-sf", filepath.Join(installDir, "bin", "nvim"), symlink}, CmdOpts{AsSudo: true})
-	fmt.Printf("  Neovim installed to %s, symlinked at %s\n", installDir, symlink)
+	runCmd([]string{"ln", "-sf", filepath.Join(installDir, "bin", "nvim"), symlink}, CmdOpts{AsSudo: true, Out: out})
+	taskPrintf("  Neovim installed to %s, symlinked at %s\n", installDir, symlink)
 }
 
 // ── latest-version resolvers ────────────────────────────────────────────
@@ -443,7 +447,7 @@ func resolveLatest(pkg *CustomPackage) {
 	if !ok {
 		return
 	}
-	fmt.Printf("  Checking latest version for %s ...\n", pkg.Name)
+	taskPrintf("  Checking latest version for %s ...\n", pkg.Name)
 	defer func() {
 		if r := recover(); r != nil {
 			warn(fmt.Sprintf("%s: latest-version lookup panicked %v; falling back to pinned version %s",
@@ -457,115 +461,241 @@ func resolveLatest(pkg *CustomPackage) {
 		return
 	}
 	if version == pkg.Version {
-		fmt.Printf("  Pinned version %s is already the latest.\n", pkg.Version)
+		taskPrintf("  Pinned version %s is already the latest.\n", pkg.Version)
 		return
 	}
-	fmt.Printf("  Latest is %s (pinned was %s); using latest.\n", version, pkg.Version)
+	taskPrintf("  Latest is %s (pinned was %s); using latest.\n", version, pkg.Version)
 	pkg.Version = version
 	pkg.SHA256 = strings.ToLower(sha)
 	pkg.SHA256URLTemplate = "" // prefer the freshly resolved sha256
 }
 
+// resolveLatestAll fetches latest versions for all packages with a
+// FetchLatest hint in parallel — three small HTTP calls today, but enough to
+// matter on slower connections. Each lookup is independent and idempotent.
+func resolveLatestAll(pkgs []*CustomPackage) {
+	var withLatest []*CustomPackage
+	for _, p := range pkgs {
+		if _, ok := latestResolvers[p.FetchLatest]; ok {
+			withLatest = append(withLatest, p)
+		}
+	}
+	if len(withLatest) == 0 {
+		return
+	}
+	parallelDo(withLatest, httpWorkers(), func(_ int, p *CustomPackage) {
+		resolveLatest(p)
+	})
+}
+
 // ── orchestration ───────────────────────────────────────────────────────
+
+// Dependency map for custom packages:
+//
+//	nvm      → claude, codex, copilot, playwright   (need node from nvm)
+//	(none)   → go, firecracker, zig, neovim, pyenv, pip, oh-my-zsh, agy,
+//	           gh-repo-bootstrap  (independent)
+//
+// Within "independent", we further split:
+//
+//	Wave A (parallel, idempotent on disk targets that don't overlap):
+//	    go, firecracker, zig, neovim, pyenv, pip, oh-my-zsh, agy, nvm,
+//	    gh-repo-bootstrap
+//
+//	Wave B (after Wave A; needs nvm/node to exist):
+//	    claude, codex, copilot, playwright — batched into one pnpm call
+//
+// We parallelize Wave A up to cpuWorkers(). Each install runs under its own
+// taskOutput so output stays grouped per-package. Wave B runs after Wave A
+// has produced ~/.nvm; it batches the npm tools into a single `pnpm add -g`
+// call (single Node startup, single pnpm dep solve).
+
+func nodeDependentPkgs() map[string]bool {
+	return map[string]bool{
+		"claude":     true,
+		"codex":      true,
+		"copilot":    true,
+		"playwright": true,
+	}
+}
+
+// runOneCustomInstall executes a single custom package's install handler.
+// The caller is responsible for setting up the goroutine-local task output
+// when running in parallel. extracted from the old switch statement.
+func runOneCustomInstall(pkg *CustomPackage) {
+	name := strings.ToLower(pkg.Name)
+	_, checkPath := isCustomPkgInstalled(pkg)
+	extra := ""
+	if checkPath != "" {
+		extra = fmt.Sprintf(" (install path: %s)", checkPath)
+	}
+	taskPrintf("\n  Installing %s ...%s\n", pkg.displayName(), extra)
+	if checkPath == "" && name != "pip" {
+		warn(fmt.Sprintf("%s: no known install path — script will not detect future installs", pkg.Name))
+	}
+
+	if name == "firecracker" && isMacOS {
+		warn(fmt.Sprintf("%s: Linux-only — skipping on macOS", pkg.Name))
+		return
+	}
+
+	switch name {
+	case "nvm":
+		installNVM()
+		return
+	case "pyenv":
+		installPyenv()
+		return
+	case "pip":
+		installPip()
+		return
+	case "oh-my-zsh":
+		installOhMyZsh()
+		return
+	case "neovim":
+		tmp, err := os.MkdirTemp("", "bootstrap-nvim-")
+		if err != nil {
+			errLog(fmt.Sprintf("neovim tmp dir failed: %v", err))
+			return
+		}
+		installNeovim(pkg, tmp)
+		osRemoveAll(tmp)
+		return
+	case "agy":
+		installAgy()
+		return
+	case "gh-repo-bootstrap":
+		installGHExtension("JMR-dev/gh-repo-bootstrap")
+		return
+	}
+
+	url := pkg.resolveURL()
+	if url == "" {
+		warn(fmt.Sprintf("No URL or install handler for '%s' — skipping", pkg.Name))
+		return
+	}
+	if !urlArchOK(pkg) {
+		return
+	}
+
+	tmp, err := os.MkdirTemp("", "bootstrap-custom-")
+	if err != nil {
+		errLog(fmt.Sprintf("tmp dir failed for %s: %v", pkg.Name, err))
+		return
+	}
+	defer osRemoveAll(tmp)
+	archive := filepath.Join(tmp, filepath.Base(url))
+	if !download(url, archive) {
+		return
+	}
+	if !verifyArchive(archive, pkg) {
+		return
+	}
+	switch name {
+	case "go":
+		installGo(archive)
+	case "firecracker":
+		installFirecracker(archive, tmp)
+	case "zig":
+		installZig(pkg, archive)
+	default:
+		warn(fmt.Sprintf("No install handler for '%s' — skipping", pkg.Name))
+	}
+}
+
+// installNpmToolsBatch installs all npm-based CLI tools (claude, codex,
+// copilot, playwright) in a single `pnpm add -g` invocation. This is
+// significantly faster than per-tool installs because pnpm only resolves
+// the dep graph and starts Node once. On batch failure we fall back to
+// per-package installs so we can report exactly which tool broke.
+//
+// playwright is special: after the npm install we still need to provision
+// browsers via `pnpx playwright install`. We do that after the batch.
+func installNpmToolsBatch(pkgs []*CustomPackage) {
+	if len(pkgs) == 0 {
+		return
+	}
+	home, _ := os.UserHomeDir()
+	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
+		errLog("NVM is not installed — cannot install npm-based tools")
+		return
+	}
+	ensureNodeLTS()
+
+	npmNames := map[string]string{
+		"claude":     "@anthropic-ai/claude-code",
+		"codex":      "@openai/codex",
+		"copilot":    "@github/copilot",
+		"playwright": "playwright",
+	}
+
+	var npmPkgs []string
+	var hasPlaywright bool
+	for _, p := range pkgs {
+		n := strings.ToLower(p.Name)
+		if pkg, ok := npmNames[n]; ok {
+			npmPkgs = append(npmPkgs, pkg)
+			if n == "playwright" {
+				hasPlaywright = true
+			}
+		}
+	}
+	if len(npmPkgs) == 0 {
+		return
+	}
+
+	fmt.Printf("\n  Installing %d npm tool(s) via pnpm in one batch ...\n", len(npmPkgs))
+	addCmd := fmt.Sprintf(`bash -c '%ssource ~/.nvm/nvm.sh && pnpm add -g %s'`,
+		pnpmEnvPrefix(), strings.Join(npmPkgs, " "))
+	if !runShell(addCmd, CmdOpts{}).OK() {
+		warn("Batched pnpm add -g failed; retrying per-package to isolate failures ...")
+		for _, p := range pkgs {
+			n := strings.ToLower(p.Name)
+			if pkg, ok := npmNames[n]; ok {
+				installNpmPackage(pkg)
+			}
+		}
+	}
+
+	if hasPlaywright {
+		installPlaywrightBrowsers()
+	}
+}
 
 func installCustomPackages(toInstall []*CustomPackage) {
 	fmt.Println("\n=== Custom Packages ===")
-	ensureNodeLTS()
-	for _, pkg := range toInstall {
-		name := strings.ToLower(pkg.Name)
-		_, checkPath := isCustomPkgInstalled(pkg)
-		extra := ""
-		if checkPath != "" {
-			extra = fmt.Sprintf(" (install path: %s)", checkPath)
-		}
-		fmt.Printf("\n  Installing %s ...%s\n", pkg.displayName(), extra)
-		if checkPath == "" && name != "pip" {
-			warn(fmt.Sprintf("%s: no known install path — script will not detect future installs", pkg.Name))
-		}
-
-		if name == "firecracker" && isMacOS {
-			warn(fmt.Sprintf("%s: Linux-only — skipping on macOS", pkg.Name))
-			continue
-		}
-
-		switch name {
-		case "nvm":
-			installNVM()
-			ensureNodeLTS()
-			continue
-		case "pyenv":
-			installPyenv()
-			continue
-		case "pip":
-			installPip()
-			continue
-		case "oh-my-zsh":
-			installOhMyZsh()
-			continue
-		case "neovim":
-			tmp, err := os.MkdirTemp("", "bootstrap-nvim-")
-			if err != nil {
-				errLog(fmt.Sprintf("neovim tmp dir failed: %v", err))
-				continue
-			}
-			installNeovim(pkg, tmp)
-			osRemoveAll(tmp)
-			continue
-		case "agy":
-			installAgy()
-			continue
-		case "claude":
-			installNpmPackage("@anthropic-ai/claude-code")
-			continue
-		case "codex":
-			installNpmPackage("@openai/codex")
-			continue
-		case "copilot":
-			installNpmPackage("@github/copilot")
-			continue
-		case "playwright":
-			installPlaywright()
-			continue
-		case "gh-repo-bootstrap":
-			installGHExtension("JMR-dev/gh-repo-bootstrap")
-			continue
-		}
-
-		resolveLatest(pkg)
-
-		url := pkg.resolveURL()
-		if url == "" {
-			warn(fmt.Sprintf("No URL or install handler for '%s' — skipping", pkg.Name))
-			continue
-		}
-		if !urlArchOK(pkg) {
-			continue
-		}
-
-		tmp, err := os.MkdirTemp("", "bootstrap-custom-")
-		if err != nil {
-			errLog(fmt.Sprintf("tmp dir failed for %s: %v", pkg.Name, err))
-			continue
-		}
-		archive := filepath.Join(tmp, filepath.Base(url))
-		if !download(url, archive) {
-			osRemoveAll(tmp)
-			continue
-		}
-		if !verifyArchive(archive, pkg) {
-			osRemoveAll(tmp)
-			continue
-		}
-		switch name {
-		case "go":
-			installGo(archive)
-		case "firecracker":
-			installFirecracker(archive, tmp)
-		case "zig":
-			installZig(pkg, archive)
-		default:
-			warn(fmt.Sprintf("No install handler for '%s' — skipping", pkg.Name))
-		}
-		osRemoveAll(tmp)
+	if len(toInstall) == 0 {
+		return
 	}
+
+	// Fetch latest versions for all to-install packages in parallel up
+	// front — small HTTP calls but they add up serially on slow links.
+	resolveLatestAll(toInstall)
+
+	// Split into independent (Wave A) vs node-dependent (Wave B).
+	nodeDeps := nodeDependentPkgs()
+	var waveA, waveB []*CustomPackage
+	for _, p := range toInstall {
+		if nodeDeps[strings.ToLower(p.Name)] {
+			waveB = append(waveB, p)
+		} else {
+			waveA = append(waveA, p)
+		}
+	}
+
+	// Wave A: parallel up to cpuWorkers(). Each package's output is buffered
+	// to a per-task taskOutput and flushed on completion so that concurrent
+	// installs don't interleave on stdout.
+	parallelDo(waveA, cpuWorkers(), func(_ int, pkg *CustomPackage) {
+		tOut := newCapturedOutput(pkg.Name)
+		withTaskOutput(tOut, func() {
+			runOneCustomInstall(pkg)
+		})
+		tOut.Flush(os.Stdout)
+	})
+
+	// Wave B (npm tools): batched into a single pnpm call. Requires Wave A
+	// to have completed (specifically: nvm install + ensureNodeLTS), so we
+	// run it after the parallel block returns.
+	installNpmToolsBatch(waveB)
 }

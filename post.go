@@ -17,12 +17,12 @@ import (
 // ── pyenv / Python ──────────────────────────────────────────────────────
 
 func installPyenv() {
-	fmt.Println("  Installing pyenv via curl ...")
-	if !runShell("curl https://pyenv.run | bash", CmdOpts{}).OK() {
+	taskPrintln("  Installing pyenv via curl ...")
+	if !runShell("curl https://pyenv.run | bash", CmdOpts{Out: taskOut()}).OK() {
 		errLog("pyenv installation failed")
 		return
 	}
-	fmt.Println("  pyenv installed to ~/.pyenv")
+	taskPrintln("  pyenv installed to ~/.pyenv")
 }
 
 func python3DecimalOK() bool {
@@ -46,6 +46,7 @@ func fixPython3Decimal() bool {
 }
 
 func installPip() {
+	out := taskOut()
 	if !hasCmd("python3") {
 		errLog("python3 is not installed — cannot install pip")
 		return
@@ -53,7 +54,7 @@ func installPip() {
 	if !python3DecimalOK() {
 		warn("Python 3 _decimal C extension failed to import — attempting fix ...")
 		if fixPython3Decimal() {
-			fmt.Println("  Python 3 _decimal extension restored.")
+			taskPrintln("  Python 3 _decimal extension restored.")
 		} else {
 			errLog("Python 3 _decimal C extension could not be fixed. " +
 				"Run: sudo apt-get install python3-full (Debian/Ubuntu), " +
@@ -63,19 +64,19 @@ func installPip() {
 		}
 	}
 
-	fmt.Println("  Bootstrapping pip via 'python3 -m ensurepip --upgrade' ...")
-	bootstrap := runCmd([]string{"python3", "-m", "ensurepip", "--upgrade"}, CmdOpts{AsSudo: true})
+	taskPrintln("  Bootstrapping pip via 'python3 -m ensurepip --upgrade' ...")
+	bootstrap := runCmd([]string{"python3", "-m", "ensurepip", "--upgrade"}, CmdOpts{AsSudo: true, Out: out})
 	if !bootstrap.OK() {
 		switch pkgMgr {
 		case "apt-get":
 			warn("ensurepip unavailable in system Python — installing python3-pip via apt-get")
-			if !runCmd([]string{"apt-get", "install", "-y", "python3-pip"}, CmdOpts{AsSudo: true}).OK() {
+			if !runCmd([]string{"apt-get", "install", "-y", "python3-pip"}, CmdOpts{AsSudo: true, Out: out}).OK() {
 				errLog("python3-pip failed to install via apt-get — skipping pip bootstrap")
 				return
 			}
 		case "pacman":
 			warn("ensurepip unavailable in system Python — installing python-pip via pacman")
-			if !runCmd([]string{"pacman", "-S", "--noconfirm", "--needed", "python-pip"}, CmdOpts{AsSudo: true}).OK() {
+			if !runCmd([]string{"pacman", "-S", "--noconfirm", "--needed", "python-pip"}, CmdOpts{AsSudo: true, Out: out}).OK() {
 				errLog("python-pip failed to install via pacman — skipping pip bootstrap")
 				return
 			}
@@ -84,8 +85,8 @@ func installPip() {
 			return
 		}
 	}
-	fmt.Println("  Upgrading pip to the latest version ...")
-	upgrade := runCmd([]string{"python3", "-m", "pip", "install", "--upgrade", "pip"}, CmdOpts{AsSudo: true})
+	taskPrintln("  Upgrading pip to the latest version ...")
+	upgrade := runCmd([]string{"python3", "-m", "pip", "install", "--upgrade", "pip"}, CmdOpts{AsSudo: true, Out: out})
 	if !upgrade.OK() {
 		warn("pip self-upgrade failed (likely PEP 668 externally-managed); ensurepip-provided pip remains")
 	}
@@ -212,12 +213,12 @@ func installNVM() {
 		return
 	}
 	installURL := fmt.Sprintf("https://raw.githubusercontent.com/nvm-sh/nvm/%s/install.sh", version)
-	fmt.Printf("  Installing NVM %s via curl ...\n", version)
-	if !runShell(fmt.Sprintf("curl -o- %s | bash", installURL), CmdOpts{}).OK() {
+	taskPrintf("  Installing NVM %s via curl ...\n", version)
+	if !runShell(fmt.Sprintf("curl -o- %s | bash", installURL), CmdOpts{Out: taskOut()}).OK() {
 		errLog("NVM installation failed")
 		return
 	}
-	fmt.Printf("  NVM %s installed to ~/.nvm\n", version)
+	taskPrintf("  NVM %s installed to ~/.nvm\n", version)
 }
 
 func ensureNodeLTS() {
@@ -269,11 +270,11 @@ func installOhMyZsh() {
 	home, _ := os.UserHomeDir()
 	target := filepath.Join(home, ".oh-my-zsh")
 	if _, err := osStat(target); err == nil {
-		fmt.Printf("  oh-my-zsh already present at %s; updating theme only\n", target)
+		taskPrintf("  oh-my-zsh already present at %s; updating theme only\n", target)
 	} else {
-		fmt.Println("  Installing oh-my-zsh via the official installer ...")
+		taskPrintln("  Installing oh-my-zsh via the official installer ...")
 		installer := `sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended`
-		if !runShell(installer, CmdOpts{}).OK() {
+		if !runShell(installer, CmdOpts{Out: taskOut()}).OK() {
 			errLog("oh-my-zsh installer failed")
 			return
 		}
@@ -298,9 +299,9 @@ func installOhMyZsh() {
 			errLog(fmt.Sprintf("could not write ~/.zshrc: %v", err))
 			return
 		}
-		fmt.Println(`  Set ZSH_THEME="gnzh" in ~/.zshrc`)
+		taskPrintln(`  Set ZSH_THEME="gnzh" in ~/.zshrc`)
 	} else {
-		fmt.Println(`  ~/.zshrc already has ZSH_THEME="gnzh"`)
+		taskPrintln(`  ~/.zshrc already has ZSH_THEME="gnzh"`)
 	}
 }
 
@@ -472,8 +473,8 @@ func askYN(prompt string) bool {
 }
 
 func installAgy() {
-	fmt.Println("  Installing agy via curl ...")
-	if !runShell("curl -fsSL https://antigravity.google/cli/install.sh | bash", CmdOpts{}).OK() {
+	taskPrintln("  Installing agy via curl ...")
+	if !runShell("curl -fsSL https://antigravity.google/cli/install.sh | bash", CmdOpts{Out: taskOut()}).OK() {
 		errLog("agy installation failed")
 	}
 }
@@ -492,26 +493,18 @@ func installNpmPackage(pkgName string) {
 		return
 	}
 	ensureNodeLTS()
-	fmt.Printf("  Installing %s via pnpm ...\n", pkgName)
+	taskPrintf("  Installing %s via pnpm ...\n", pkgName)
 	cmd := fmt.Sprintf(`bash -c '%ssource ~/.nvm/nvm.sh && pnpm add -g %s'`, pnpmEnvPrefix(), pkgName)
-	if !runShell(cmd, CmdOpts{}).OK() {
+	if !runShell(cmd, CmdOpts{Out: taskOut()}).OK() {
 		errLog(fmt.Sprintf("%s installation failed", pkgName))
 	}
 }
 
-func installPlaywright() {
-	home, _ := os.UserHomeDir()
-	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
-		errLog("NVM is not installed — cannot install playwright")
-		return
-	}
-	ensureNodeLTS()
-	fmt.Println("  Installing playwright via pnpm ...")
-	addCmd := fmt.Sprintf(`bash -c '%ssource ~/.nvm/nvm.sh && pnpm add -g playwright'`, pnpmEnvPrefix())
-	if !runShell(addCmd, CmdOpts{}).OK() {
-		errLog("playwright installation failed")
-		return
-	}
+// installPlaywrightBrowsers runs `pnpx playwright install` (with --with-deps
+// on apt-get). Separated from the npm-side install so that installNpmToolsBatch
+// can do all `pnpm add -g` work in one call and then just provision browsers
+// once if playwright was in the batch.
+func installPlaywrightBrowsers() {
 	installCmd := "pnpx playwright install"
 	if pkgMgr == "apt-get" {
 		fmt.Println("  Installing Playwright browsers with dependencies ...")
@@ -524,13 +517,29 @@ func installPlaywright() {
 	}
 }
 
+func installPlaywright() {
+	home, _ := os.UserHomeDir()
+	if _, err := osStat(filepath.Join(home, ".nvm")); err != nil {
+		errLog("NVM is not installed — cannot install playwright")
+		return
+	}
+	ensureNodeLTS()
+	taskPrintln("  Installing playwright via pnpm ...")
+	addCmd := fmt.Sprintf(`bash -c '%ssource ~/.nvm/nvm.sh && pnpm add -g playwright'`, pnpmEnvPrefix())
+	if !runShell(addCmd, CmdOpts{Out: taskOut()}).OK() {
+		errLog("playwright installation failed")
+		return
+	}
+	installPlaywrightBrowsers()
+}
+
 func installGHExtension(repo string) {
 	if !hasCmd("gh") {
 		errLog("gh CLI is not installed — cannot install extension " + repo)
 		return
 	}
-	fmt.Printf("  Installing gh extension %s ...\n", repo)
-	if !runCmd([]string{"gh", "extension", "install", repo}, CmdOpts{}).OK() {
+	taskPrintf("  Installing gh extension %s ...\n", repo)
+	if !runCmd([]string{"gh", "extension", "install", repo}, CmdOpts{Out: taskOut()}).OK() {
 		errLog(fmt.Sprintf("gh extension install %s failed", repo))
 	}
 }
