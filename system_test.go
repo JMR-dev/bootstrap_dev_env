@@ -247,32 +247,7 @@ func TestInstallMinikube(t *testing.T) {
 	}
 }
 
-func TestInstallBashtop(t *testing.T) {
-	defer resetMocks()
 
-	osStat = func(name string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist // Not cloned yet
-	}
-
-	var runCmdCalls [][]string
-	runCmd = func(argv []string, opts CmdOpts) CmdResult {
-		runCmdCalls = append(runCmdCalls, argv)
-		return CmdResult{ExitCode: 0}
-	}
-
-	installBashtop("/tmp")
-
-	// Git clone and make install should be run
-	if len(runCmdCalls) < 2 {
-		t.Fatalf("expected git clone and make install, got calls: %v", runCmdCalls)
-	}
-	if runCmdCalls[0][1] != "clone" {
-		t.Errorf("expected git clone, got %v", runCmdCalls[0])
-	}
-	if runCmdCalls[1][0] != "make" || runCmdCalls[1][1] != "install" {
-		t.Errorf("expected make install, got %v", runCmdCalls[1])
-	}
-}
 
 func TestInstallPulumi(t *testing.T) {
 	defer resetMocks()

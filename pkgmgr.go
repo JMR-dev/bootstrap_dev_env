@@ -223,25 +223,6 @@ func resolveSystemPkgs(names []string) ([]string, []string) {
 	return resolved, skipped
 }
 
-func installSystemPackages(pkgs []string, special []string) {
-	if len(special) > 0 {
-		tmp, err := os.MkdirTemp("", "bootstrap-special-")
-		if err != nil {
-			errLog(fmt.Sprintf("could not create temp dir for special packages: %v", err))
-			return
-		}
-		defer osRemoveAll(tmp)
-		for _, pkg := range special {
-			fmt.Printf("\n  [SPECIAL] Installing %s ...\n", pkg)
-			installSpecialPkg(pkg, tmp)
-		}
-	}
-
-	if pkgMgr == "apt-get" && hasCmd("fdfind") {
-		runCmd([]string{"ln", "-sf", "/usr/bin/fdfind", "/usr/local/bin/fd"}, CmdOpts{AsSudo: true})
-	}
-}
-
 // isSystemPkgInstalled queries the host package manager.
 func isSystemPkgInstalled(pkg string) bool {
 	switch pkgMgr {

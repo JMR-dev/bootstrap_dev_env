@@ -610,57 +610,7 @@ func TestSetupVivaldiRepoExisting(t *testing.T) {
 
 // ── special installer branches ──────────────────────────────────────────
 
-func TestInstallBashtopExistingClone(t *testing.T) {
-	defer resetMocks()
-	osStat = func(_ string) (os.FileInfo, error) { return nil, nil }
-	runCmd = func(_ []string, _ CmdOpts) CmdResult { return CmdResult{ExitCode: 0} }
-	installBashtop("/tmp")
-}
 
-func TestInstallBashtopPullFails(t *testing.T) {
-	defer resetMocks()
-	osStat = func(_ string) (os.FileInfo, error) { return nil, nil }
-	runCmd = func(argv []string, _ CmdOpts) CmdResult {
-		if len(argv) > 1 && argv[1] == "-C" {
-			return CmdResult{ExitCode: 1}
-		}
-		return CmdResult{ExitCode: 0}
-	}
-	installBashtop("/tmp")
-	if !hasIssueContaining("bashtop git pull failed") {
-		t.Error("expected pull failure error")
-	}
-}
-
-func TestInstallBashtopCloneFails(t *testing.T) {
-	defer resetMocks()
-	osStat = func(_ string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-	runCmd = func(argv []string, _ CmdOpts) CmdResult {
-		if argv[0] == "git" && argv[1] == "clone" {
-			return CmdResult{ExitCode: 1}
-		}
-		return CmdResult{ExitCode: 0}
-	}
-	installBashtop("/tmp")
-	if !hasIssueContaining("bashtop git clone failed") {
-		t.Error("expected clone failure error")
-	}
-}
-
-func TestInstallBashtopMakeFails(t *testing.T) {
-	defer resetMocks()
-	osStat = func(_ string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-	runCmd = func(argv []string, _ CmdOpts) CmdResult {
-		if argv[0] == "make" {
-			return CmdResult{ExitCode: 1}
-		}
-		return CmdResult{ExitCode: 0}
-	}
-	installBashtop("/tmp")
-	if !hasIssueContaining("make install") {
-		t.Error("expected make install failure error")
-	}
-}
 
 func TestInstallPulumiNoVersion(t *testing.T) {
 	defer resetMocks()

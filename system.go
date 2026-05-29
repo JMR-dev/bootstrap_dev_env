@@ -37,7 +37,6 @@ var guiSystemPkgs = map[string]bool{
 }
 
 func isSpecialPkgInstalled(pkg string) bool {
-	home, _ := os.UserHomeDir()
 	exists := func(p string) bool { _, err := osStat(p); return err == nil }
 	switch pkg {
 	case "obsidian":
@@ -496,6 +495,10 @@ func installSystemPackages(regular, special []string) {
 			fmt.Printf("\n  [SPECIAL] Installing %s ...\n", pkg)
 			installSpecialPkg(pkg, tmp)
 		}
+	}
+
+	if pkgMgr == "apt-get" && hasCmd("fdfind") {
+		runCmd([]string{"ln", "-sf", "/usr/bin/fdfind", "/usr/local/bin/fd"}, CmdOpts{AsSudo: true})
 	}
 }
 
