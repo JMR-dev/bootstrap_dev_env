@@ -64,6 +64,12 @@ var (
 	osZig  = map[string]string{"linux": "linux", "macos": "macos"}
 	osNvim = map[string]string{"linux": "linux", "macos": "macos"}
 
+	osRustup = map[string]string{"linux": "unknown-linux-gnu", "macos": "apple-darwin"}
+	archRustup = map[string]string{"x86_64": "x86_64", "aarch64": "aarch64"}
+	osTrivy = map[string]string{"linux": "Linux", "macos": "macOS"}
+	archTrivy = map[string]string{"x86_64": "64bit", "aarch64": "ARM64"}
+	archGitleaks = map[string]string{"x86_64": "x64", "aarch64": "arm64"}
+
 	archTokens = map[string][]string{
 		"x86_64":  {"x86_64", "amd64", "x64"},
 		"aarch64": {"aarch64", "arm64"},
@@ -81,6 +87,11 @@ func formatURL(template, version string) string {
 		"{os_go}", osGo[osName],
 		"{os_zig}", osZig[osName],
 		"{os_nvim}", osNvim[osName],
+		"{os_rustup}", osRustup[osName],
+		"{arch_rustup}", archRustup[archName],
+		"{os_trivy}", osTrivy[osName],
+		"{arch_trivy}", archTrivy[archName],
+		"{arch_gitleaks}", archGitleaks[archName],
 	)
 	return r.Replace(template)
 }

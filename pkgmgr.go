@@ -77,6 +77,7 @@ var packageOverrides = map[string]map[string]overrideEntry{
 		"webcamoid":       skipOverride(),
 	},
 	"apt-get": {
+		"fd":             replace("fd-find"),
 		"ffmpeg-free":    replace("ffmpeg"),
 		"lua":            replace("lua5.4"),
 		"qemu":           replace("qemu-system"),
@@ -165,7 +166,6 @@ var packageOverrides = map[string]map[string]overrideEntry{
 		"rg":                        replace("ripgrep"),
 		"temurin-25-jdk":            replace("temurin"),
 		"vivaldi-stable":            replace("vivaldi"),
-		"bashtop":                   replace("btop"),
 		"buildah":                   skipOverride(),
 		"shutter":                   skipOverride(),
 		"virt-manager":              skipOverride(),
@@ -221,6 +221,25 @@ func resolveSystemPkgs(names []string) ([]string, []string) {
 		resolved = append(resolved, ov.Replacement...)
 	}
 	return resolved, skipped
+}
+
+func installSystemPackages(pkgs []string, special []string) {
+	if len(special) > 0 {
+		tmp, err := os.MkdirTemp("", "bootstrap-special-")
+		if err != nil {
+			errLog(fmt.Sprintf("could not create temp dir for special packages: %v", err))
+			return
+		}
+		defer osRemoveAll(tmp)
+		for _, pkg := range special {
+			fmt.Printf("\n  [SPECIAL] Installing %s ...\n", pkg)
+			installSpecialPkg(pkg, tmp)
+		}
+	}
+
+	if pkgMgr == "apt-get" && hasCmd("fdfind") {
+		runCmd([]string{"ln", "-sf", "/usr/bin/fdfind", "/usr/local/bin/fd"}, CmdOpts{AsSudo: true})
+	}
 }
 
 // isSystemPkgInstalled queries the host package manager.

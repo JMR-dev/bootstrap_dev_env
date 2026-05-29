@@ -16,8 +16,8 @@ func specialPkgs() map[string]bool {
 	}
 	return map[string]bool{
 		"github-desktop": true, "zoom": true, "obsidian": true,
-		"minikube": true, "bashtop": true, "pipx": true,
-		"poetry": true, "pulumi": true,
+		"minikube": true, "pipx": true,
+		"poetry": true, "pulumi": true, "semgrep": true,
 	}
 }
 
@@ -44,14 +44,14 @@ func isSpecialPkgInstalled(pkg string) bool {
 		return exists("/usr/local/bin/obsidian")
 	case "minikube":
 		return exists("/usr/local/bin/minikube") || hasCmd("minikube")
-	case "bashtop":
-		return exists("/usr/local/bin/bashtop") || exists(filepath.Join(home, "bashtop"))
 	case "pulumi":
 		return exists("/opt/pulumi/pulumi") || hasCmd("pulumi")
 	case "pipx":
 		return hasCmd("pipx")
 	case "poetry":
 		return hasCmd("poetry")
+	case "semgrep":
+		return hasCmd("semgrep")
 	}
 	return isSystemPkgInstalled(pkg)
 }
@@ -259,30 +259,6 @@ func installMinikube(tmp string) {
 	fmt.Printf("  minikube installed to %s\n", installPath)
 }
 
-func installBashtop(_ string) {
-	home, _ := os.UserHomeDir()
-	cloneDir := filepath.Join(home, "bashtop")
-	if _, err := osStat(cloneDir); err == nil {
-		fmt.Printf("  Updating existing clone at %s ...\n", cloneDir)
-		if !runCmd([]string{"git", "-C", cloneDir, "pull"}, CmdOpts{}).OK() {
-			errLog("bashtop git pull failed")
-			return
-		}
-	} else {
-		fmt.Printf("  Cloning bashtop to %s ...\n", cloneDir)
-		if !runCmd([]string{"git", "clone", "https://github.com/aristocratos/bashtop.git", cloneDir}, CmdOpts{}).OK() {
-			errLog("bashtop git clone failed")
-			return
-		}
-	}
-	if !runCmd([]string{"make", "install"}, CmdOpts{AsSudo: true, Cwd: cloneDir}).OK() {
-		errLog("bashtop 'make install' failed")
-		return
-	}
-	appendProfileLine("bashtop", "export PATH=$PATH:"+cloneDir)
-	fmt.Printf("  bashtop installed. Clone at %s, binary at /usr/local/bin/bashtop\n", cloneDir)
-}
-
 func installPulumi(tmp string) {
 	version := fetchText("https://www.pulumi.com/latest-version")
 	if version == "" {
@@ -356,6 +332,14 @@ func installPoetry(_ string) {
 	runCmd([]string{"pipx", "install", "poetry"}, CmdOpts{})
 }
 
+func installSemgrep(_ string) {
+	if !hasCmd("pipx") {
+		errLog("pipx is not installed — cannot install semgrep")
+		return
+	}
+	runCmd([]string{"pipx", "install", "semgrep"}, CmdOpts{})
+}
+
 func installSpecialPkg(pkg, tmp string) {
 	switch pkg {
 	case "github-desktop":
@@ -366,14 +350,14 @@ func installSpecialPkg(pkg, tmp string) {
 		installObsidian(tmp)
 	case "minikube":
 		installMinikube(tmp)
-	case "bashtop":
-		installBashtop(tmp)
 	case "pulumi":
 		installPulumi(tmp)
 	case "pipx":
 		installPipx(tmp)
 	case "poetry":
 		installPoetry(tmp)
+	case "semgrep":
+		installSemgrep(tmp)
 	}
 }
 
