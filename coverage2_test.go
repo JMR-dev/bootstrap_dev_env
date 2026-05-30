@@ -314,11 +314,11 @@ func TestInstallSystemPackagesBrewFailures(t *testing.T) {
 	defer resetMocks()
 	pkgMgr = "brew"
 	runCmd = func(_ []string, _ CmdOpts) CmdResult { return CmdResult{ExitCode: 1} }
-	captureStdout(t, func() {
+	out := captureStdout(t, func() {
 		installSystemPackages([]string{"git"}, nil)
 	})
-	if !hasIssueContaining("System package failed to install") {
-		t.Error("expected error logged for brew failure")
+	if !strings.Contains(out, "System package failed to install") {
+		t.Error("expected warning logged for brew failure")
 	}
 }
 
