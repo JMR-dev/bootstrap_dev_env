@@ -247,32 +247,7 @@ func TestInstallMinikube(t *testing.T) {
 	}
 }
 
-func TestInstallBashtop(t *testing.T) {
-	defer resetMocks()
 
-	osStat = func(name string) (os.FileInfo, error) {
-		return nil, os.ErrNotExist // Not cloned yet
-	}
-
-	var runCmdCalls [][]string
-	runCmd = func(argv []string, opts CmdOpts) CmdResult {
-		runCmdCalls = append(runCmdCalls, argv)
-		return CmdResult{ExitCode: 0}
-	}
-
-	installBashtop("/tmp")
-
-	// Git clone and make install should be run
-	if len(runCmdCalls) < 2 {
-		t.Fatalf("expected git clone and make install, got calls: %v", runCmdCalls)
-	}
-	if runCmdCalls[0][1] != "clone" {
-		t.Errorf("expected git clone, got %v", runCmdCalls[0])
-	}
-	if runCmdCalls[1][0] != "make" || runCmdCalls[1][1] != "install" {
-		t.Errorf("expected make install, got %v", runCmdCalls[1])
-	}
-}
 
 func TestInstallPulumi(t *testing.T) {
 	defer resetMocks()
@@ -402,9 +377,7 @@ func TestSystemGoEdgeCases(t *testing.T) {
 	}
 	hasCmd = func(name string) bool { return true }
 
-	if !isSpecialPkgInstalled("bashtop") {
-		t.Error("expected bashtop to be installed")
-	}
+
 	if !isSpecialPkgInstalled("pulumi") {
 		t.Error("expected pulumi to be installed")
 	}
@@ -470,14 +443,7 @@ func TestSystemGoEdgeCases(t *testing.T) {
 	fetchText = func(url string) string { return "mismatch-checksum  minikube" }
 	installSpecialPkg("minikube", "/tmp")
 
-	resetMocks()
-	osStat = func(name string) (os.FileInfo, error) {
-		return nil, nil
-	}
-	runCmd = func(argv []string, opts CmdOpts) CmdResult {
-		return CmdResult{ExitCode: 1}
-	}
-	installSpecialPkg("bashtop", "/tmp")
+
 
 	resetMocks()
 	fetchText = func(url string) string { return "some-sha  pulumi-v3.90.0-linux-x64.tar.gz" }

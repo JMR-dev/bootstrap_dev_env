@@ -85,11 +85,11 @@ func TestResolveSystemPkgs(t *testing.T) {
 		t.Errorf("expected skipped to be [docker-compose], got %v", skipped)
 	}
 
-	// brew: bashtop -> btop (replace), buildah -> skipped
+	// brew: buildah -> skipped
 	pkgMgr = "brew"
-	resolved, skipped = resolveSystemPkgs([]string{"bashtop", "buildah", "rg"})
-	if len(resolved) != 2 || resolved[0] != "btop" || resolved[1] != "ripgrep" {
-		t.Errorf("expected [btop ripgrep], got %v", resolved)
+	resolved, skipped = resolveSystemPkgs([]string{"buildah", "rg"})
+	if len(resolved) != 1 || resolved[0] != "ripgrep" {
+		t.Errorf("expected [ripgrep], got %v", resolved)
 	}
 	// pacman: docker-ce-rootless-extras and vagrant are AUR-only -> skipped;
 	// pipx is replaced with python-pipx.

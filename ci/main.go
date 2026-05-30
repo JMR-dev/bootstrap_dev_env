@@ -34,7 +34,7 @@ func main() {
 		From("golang:1.25").
 		WithMountedDirectory("/src", src).
 		WithWorkdir("/src").
-		WithExec([]string{"go", "build", "-o", "bootstrap_environment", "."})
+		WithExec([]string{"go", "build", "-buildvcs=false", "-o", "bootstrap_environment", "."})
 
 	binaryFile := builder.File("bootstrap_environment")
 
@@ -105,7 +105,8 @@ func main() {
 			fmt.Printf("[%s] Verifying package installations on PATH and running version checks...\n", target)
 			verifyCmd := []string{
 				"sh", "-c",
-				"export PATH=$PATH:/usr/local/go/bin; " +
+				"set -e -x; " +
+					"export PATH=$PATH:/usr/local/go/bin:/usr/local/bin; " +
 					"which go && go version && " +
 					"which nvim && nvim --version && " +
 					"which zig && zig version && " +
@@ -113,7 +114,8 @@ func main() {
 			}
 			verifyOutput, err := testContainer.WithExec(verifyCmd).Stdout(ctx)
 			if err != nil {
-				return fmt.Errorf("verification failed on %s: package not found on PATH or exited with error (%w)", target, err)
+				// To see the stdout/stderr of the failing command, we can try to extract it from dagger's ExecError
+				return fmt.Errorf("verification failed on %s: %v", target, err)
 			}
 
 

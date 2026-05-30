@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"os"
+	"strings"
 )
 
 func resetMocks() {
@@ -20,9 +22,12 @@ func resetMocks() {
 	osMkdirAll = os.MkdirAll
 	osRemove = os.Remove
 	osRemoveAll = os.RemoveAll
-	osRename = os.Rename
 	osExit = os.Exit
-	stdin = os.Stdin
+	// Default to an empty reader so un-mocked tests don't hang waiting for user input.
+	stdin = strings.NewReader("")
+	readPassword = func() ([]byte, error) {
+		return nil, errors.New("terminal blocked in test")
+	}
 
 	// Reset global state variables to safe defaults
 	isMacOS = false

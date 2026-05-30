@@ -53,10 +53,16 @@ var defaultInstallPaths = map[string]string{
 	"zig":         "/usr/local/bin/zig",
 	"nvm":         "~/.nvm",
 	"pyenv":       "~/.pyenv",
-	"neovim":      "/usr/local/bin/nvim",
-	"oh-my-zsh":   "~/.oh-my-zsh",
+	"neovim":            "/usr/local/bin/nvim",
+	"oh-my-zsh":         "~/.oh-my-zsh",
 	"agy":               "~/.local/bin/agy",
 	"gh-repo-bootstrap": "~/.local/share/gh/extensions/gh-repo-bootstrap",
+	"yq":                "/usr/local/bin/yq",
+	"rustup":            "~/.cargo/bin/rustup",
+	"dagger":            "/usr/local/bin/dagger",
+	"trivy":             "/usr/local/bin/trivy",
+	"cosign":            "/usr/local/bin/cosign",
+	"gitleaks":          "/usr/local/bin/gitleaks",
 }
 
 func expandHome(p string) string {
@@ -224,10 +230,7 @@ func installFirecracker(archive, tmp string) {
 		if strings.HasSuffix(name, ".tgz") || strings.HasSuffix(name, ".tar.gz") {
 			return nil
 		}
-		if !strings.HasPrefix(name, "firecracker") {
-			return nil
-		}
-		if strings.HasSuffix(name, ".debug") || strings.Contains(name, "debug") {
+		if !strings.HasPrefix(name, "firecracker-v") || strings.Contains(name, "debug") {
 			return nil
 		}
 		if binary == "" {
@@ -319,6 +322,48 @@ func installNeovim(_ *CustomPackage, tmp string) {
 	symlink := "/usr/local/bin/nvim"
 	runCmd([]string{"ln", "-sf", filepath.Join(installDir, "bin", "nvim"), symlink}, CmdOpts{AsSudo: true, Out: out})
 	taskPrintf("  Neovim installed to %s, symlinked at %s\n", installDir, symlink)
+}
+
+func installRustup(archive string) {
+	out := taskOut()
+	runCmd([]string{"chmod", "+x", archive}, CmdOpts{Out: out})
+	runCmd([]string{archive, "-y", "--no-modify-path"}, CmdOpts{Out: out})
+	taskPrintln("  rustup installed.")
+}
+
+func installYq(archive string) {
+	out := taskOut()
+	runCmd([]string{"cp", archive, "/usr/local/bin/yq"}, CmdOpts{AsSudo: true, Out: out})
+	runCmd([]string{"chmod", "+x", "/usr/local/bin/yq"}, CmdOpts{AsSudo: true, Out: out})
+	taskPrintln("  yq installed.")
+}
+
+func installDagger(archive, tmp string) {
+	out := taskOut()
+	runCmd([]string{"tar", "-C", tmp, "-xzf", archive}, CmdOpts{Out: out})
+	runCmd([]string{"mv", filepath.Join(tmp, "dagger"), "/usr/local/bin/dagger"}, CmdOpts{AsSudo: true, Out: out})
+	taskPrintln("  dagger installed.")
+}
+
+func installTrivy(archive, tmp string) {
+	out := taskOut()
+	runCmd([]string{"tar", "-C", tmp, "-xzf", archive}, CmdOpts{Out: out})
+	runCmd([]string{"mv", filepath.Join(tmp, "trivy"), "/usr/local/bin/trivy"}, CmdOpts{AsSudo: true, Out: out})
+	taskPrintln("  trivy installed.")
+}
+
+func installCosign(archive string) {
+	out := taskOut()
+	runCmd([]string{"cp", archive, "/usr/local/bin/cosign"}, CmdOpts{AsSudo: true, Out: out})
+	runCmd([]string{"chmod", "+x", "/usr/local/bin/cosign"}, CmdOpts{AsSudo: true, Out: out})
+	taskPrintln("  cosign installed.")
+}
+
+func installGitleaks(archive, tmp string) {
+	out := taskOut()
+	runCmd([]string{"tar", "-C", tmp, "-xzf", archive}, CmdOpts{Out: out})
+	runCmd([]string{"mv", filepath.Join(tmp, "gitleaks"), "/usr/local/bin/gitleaks"}, CmdOpts{AsSudo: true, Out: out})
+	taskPrintln("  gitleaks installed.")
 }
 
 // ── latest-version resolvers ────────────────────────────────────────────
@@ -434,10 +479,23 @@ func cmpSemver(a, b string) int {
 	return len(pa) - len(pb)
 }
 
+func resolveLatestYq(_ *CustomPackage) (string, string, bool) {
+	var rel ghRelease
+	if !fetchJSON("https://api.github.com/repos/mikefarah/yq/releases/latest", &rel) {
+		return "", "", false
+	}
+	version := strings.TrimPrefix(rel.TagName, "v")
+	if version == "" {
+		return "", "", false
+	}
+	return version, "", true
+}
+
 var latestResolvers = map[string]func(*CustomPackage) (string, string, bool){
 	"go":          resolveLatestGo,
 	"firecracker": resolveLatestFirecracker,
 	"zig":         resolveLatestZig,
+	"yq":          resolveLatestYq,
 }
 
 // resolveLatest best-effort upgrades pkg.Version/SHA256 to the latest release.
@@ -598,6 +656,18 @@ func runOneCustomInstall(pkg *CustomPackage) {
 		installFirecracker(archive, tmp)
 	case "zig":
 		installZig(pkg, archive)
+	case "rustup":
+		installRustup(archive)
+	case "yq":
+		installYq(archive)
+	case "dagger":
+		installDagger(archive, tmp)
+	case "trivy":
+		installTrivy(archive, tmp)
+	case "cosign":
+		installCosign(archive)
+	case "gitleaks":
+		installGitleaks(archive, tmp)
 	default:
 		warn(fmt.Sprintf("No install handler for '%s' — skipping", pkg.Name))
 	}

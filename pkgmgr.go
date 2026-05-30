@@ -77,6 +77,7 @@ var packageOverrides = map[string]map[string]overrideEntry{
 		"webcamoid":       skipOverride(),
 	},
 	"apt-get": {
+		"fd":             replace("fd-find"),
 		"ffmpeg-free":    replace("ffmpeg"),
 		"lua":            replace("lua5.4"),
 		"qemu":           replace("qemu-system"),
@@ -165,7 +166,6 @@ var packageOverrides = map[string]map[string]overrideEntry{
 		"rg":                        replace("ripgrep"),
 		"temurin-25-jdk":            replace("temurin"),
 		"vivaldi-stable":            replace("vivaldi"),
-		"bashtop":                   replace("btop"),
 		"buildah":                   skipOverride(),
 		"shutter":                   skipOverride(),
 		"virt-manager":              skipOverride(),
