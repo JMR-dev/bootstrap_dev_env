@@ -179,6 +179,10 @@ func runMain(args []string) {
 	}
 }
 
+var readPassword = func() ([]byte, error) {
+	return term.ReadPassword(int(os.Stdin.Fd()))
+}
+
 // promptGitHubToken asks the user if they want to supply a GitHub token
 // after they've authenticated sudo. With a token, our HTTP-bound worker
 // pool uncaps from the conservative 8-worker default up to runtime.NumCPU(),
@@ -196,7 +200,7 @@ func promptGitHubToken() {
 		return
 	}
 	fmt.Print("  Paste token (input hidden): ")
-	tokenBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	tokenBytes, err := readPassword()
 	fmt.Println()
 	if err != nil {
 		warn(fmt.Sprintf("could not read token: %v — continuing without uncap", err))

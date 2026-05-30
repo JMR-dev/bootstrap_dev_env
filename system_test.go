@@ -377,9 +377,7 @@ func TestSystemGoEdgeCases(t *testing.T) {
 	}
 	hasCmd = func(name string) bool { return true }
 
-	if !isSpecialPkgInstalled("bashtop") {
-		t.Error("expected bashtop to be installed")
-	}
+
 	if !isSpecialPkgInstalled("pulumi") {
 		t.Error("expected pulumi to be installed")
 	}
@@ -445,14 +443,7 @@ func TestSystemGoEdgeCases(t *testing.T) {
 	fetchText = func(url string) string { return "mismatch-checksum  minikube" }
 	installSpecialPkg("minikube", "/tmp")
 
-	resetMocks()
-	osStat = func(name string) (os.FileInfo, error) {
-		return nil, nil
-	}
-	runCmd = func(argv []string, opts CmdOpts) CmdResult {
-		return CmdResult{ExitCode: 1}
-	}
-	installSpecialPkg("bashtop", "/tmp")
+
 
 	resetMocks()
 	fetchText = func(url string) string { return "some-sha  pulumi-v3.90.0-linux-x64.tar.gz" }

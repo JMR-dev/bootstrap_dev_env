@@ -229,6 +229,7 @@ func TestEnsureHomebrewInstallerFails(t *testing.T) {
 	defer resetMocks()
 	isMacOS = true
 	hasCmd = func(_ string) bool { return false }
+	runCmd = func(_ []string, _ CmdOpts) CmdResult { return CmdResult{ExitCode: 0} }
 	runShell = func(_ string, _ CmdOpts) CmdResult { return CmdResult{ExitCode: 1} }
 	called := false
 	osExit = func(_ int) { called = true }
@@ -245,6 +246,7 @@ func TestEnsureHomebrewBrewNotAtExpectedPath(t *testing.T) {
 	isMacOS = true
 	archName = "x86_64"
 	hasCmd = func(_ string) bool { return false }
+	runCmd = func(_ []string, _ CmdOpts) CmdResult { return CmdResult{ExitCode: 0} }
 	runShell = func(_ string, _ CmdOpts) CmdResult { return CmdResult{ExitCode: 0} }
 	osStat = func(_ string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 	called := false
@@ -614,6 +616,8 @@ func TestRunMainHasErrorsExitsOne(t *testing.T) {
 	hasCmd = func(_ string) bool { return true }
 	runCmd = func(_ []string, _ CmdOpts) CmdResult { return CmdResult{ExitCode: 0} }
 	runShell = func(_ string, _ CmdOpts) CmdResult { return CmdResult{ExitCode: 1} } // install fails
+	fetchJSON = func(_ string, _ any) bool { return false }
+	download = func(_, dest string) bool { return true }
 	stdin = strings.NewReader("y\n")
 	defer func() { stdin = os.Stdin }()
 	exitCode := -1

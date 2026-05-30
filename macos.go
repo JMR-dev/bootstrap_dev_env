@@ -380,7 +380,14 @@ func waitForVMSSH(privKey string, timeout time.Duration) bool {
 			fmt.Println("  VM SSH ready.")
 			return true
 		}
-		time.Sleep(5 * time.Second)
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			break
+		}
+		if rem > 5*time.Second {
+			rem = 5 * time.Second
+		}
+		time.Sleep(rem)
 	}
 	return false
 }
@@ -393,7 +400,14 @@ func waitForFirecrackerInVM(privKey string, timeout time.Duration) bool {
 			fmt.Println("  firecracker is installed inside the VM.")
 			return true
 		}
-		time.Sleep(10 * time.Second)
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			break
+		}
+		if rem > 10*time.Second {
+			rem = 10 * time.Second
+		}
+		time.Sleep(rem)
 	}
 	return false
 }

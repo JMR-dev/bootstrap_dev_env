@@ -53,10 +53,16 @@ var defaultInstallPaths = map[string]string{
 	"zig":         "/usr/local/bin/zig",
 	"nvm":         "~/.nvm",
 	"pyenv":       "~/.pyenv",
-	"neovim":      "/usr/local/bin/nvim",
-	"oh-my-zsh":   "~/.oh-my-zsh",
+	"neovim":            "/usr/local/bin/nvim",
+	"oh-my-zsh":         "~/.oh-my-zsh",
 	"agy":               "~/.local/bin/agy",
 	"gh-repo-bootstrap": "~/.local/share/gh/extensions/gh-repo-bootstrap",
+	"yq":                "/usr/local/bin/yq",
+	"rustup":            "~/.cargo/bin/rustup",
+	"dagger":            "/usr/local/bin/dagger",
+	"trivy":             "/usr/local/bin/trivy",
+	"cosign":            "/usr/local/bin/cosign",
+	"gitleaks":          "/usr/local/bin/gitleaks",
 }
 
 func expandHome(p string) string {
@@ -224,10 +230,7 @@ func installFirecracker(archive, tmp string) {
 		if strings.HasSuffix(name, ".tgz") || strings.HasSuffix(name, ".tar.gz") {
 			return nil
 		}
-		if !strings.HasPrefix(name, "firecracker") {
-			return nil
-		}
-		if strings.HasSuffix(name, ".debug") || strings.Contains(name, "debug") {
+		if !strings.HasPrefix(name, "firecracker-v") || strings.Contains(name, "debug") {
 			return nil
 		}
 		if binary == "" {

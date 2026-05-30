@@ -170,7 +170,7 @@ func customPackages() []CustomPackage {
 		},
 		{
 			Name:        "trivy",
-			Version:     "0.52.0",
+			Version:     "0.70.0",
 			URLTemplate: "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_{os_trivy}-{arch_trivy}.tar.gz",
 		},
 		{

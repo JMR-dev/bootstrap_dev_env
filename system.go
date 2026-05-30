@@ -461,7 +461,7 @@ func installSystemPackages(regular, special []string) {
 	if pkgMgr == "brew" {
 		failed := pkgInstallMany(regular)
 		for _, p := range failed {
-			errLog(fmt.Sprintf("System package failed to install: %s", p))
+			taskPrintf("  [WARN] System package failed to install: %s\n", p)
 		}
 		// No special packages on macOS — brew covers all of them.
 		return
@@ -481,7 +481,7 @@ func installSystemPackages(regular, special []string) {
 
 	failed := pkgInstallMany(regular)
 	for _, p := range failed {
-		errLog(fmt.Sprintf("System package failed to install: %s", p))
+		taskPrintf("  [WARN] System package failed to install: %s\n", p)
 	}
 
 	if len(special) > 0 {

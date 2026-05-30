@@ -260,6 +260,7 @@ func TestPromptGitHubTokenAcceptThenEmpty(t *testing.T) {
 	// password read can't be cleanly mocked.
 	stdin = strings.NewReader("y\n")
 	defer func() { stdin = os.Stdin }()
+	readPassword = func() ([]byte, error) { return nil, errors.New("mocked error") }
 	captureStdout(t, func() {
 		// term.ReadPassword on a non-terminal returns an error,
 		// landing in the "could not read token" warn branch.
