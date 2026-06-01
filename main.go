@@ -153,6 +153,7 @@ func runMain(args []string) {
 		if isMacOS && !*noVM {
 			setupFirecrackerVM()
 		}
+		ensureLibreOfficeAutoSave()
 	}
 
 	if pyenvWG != nil {

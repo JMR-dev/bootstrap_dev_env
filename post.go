@@ -544,3 +544,45 @@ func installGHExtension(repo string) {
 	}
 }
 
+// ── LibreOffice AutoSave Extension ──────────────────────────────────────
+
+func ensureLibreOfficeAutoSave() {
+	var unopkgPath string
+	if isMacOS {
+		unopkgPath = "/Applications/LibreOffice.app/Contents/MacOS/unopkg"
+		if _, err := osStat(unopkgPath); err != nil {
+			return
+		}
+	} else {
+		if !hasCmd("unopkg") {
+			return
+		}
+		unopkgPath = "unopkg"
+	}
+
+	fmt.Println("\n[LibreOffice] LibreOffice detected. Installing AutoSave extension ...")
+
+	tmp, err := os.MkdirTemp("", "libreoffice-autosave-")
+	if err != nil {
+		errLog(fmt.Sprintf("LibreOffice AutoSave temp dir failed: %v", err))
+		return
+	}
+	defer osRemoveAll(tmp)
+
+	url := "https://github.com/JMR-dev/LibreOfficeAutoSave/releases/latest/download/AutoSave.oxt"
+	dest := filepath.Join(tmp, "AutoSave.oxt")
+
+	if !download(url, dest) {
+		errLog("Failed to download LibreOffice AutoSave extension")
+		return
+	}
+
+	if !runCmd([]string{unopkgPath, "add", "-f", dest}, CmdOpts{}).OK() {
+		errLog("Failed to install LibreOffice AutoSave extension")
+		return
+	}
+
+	fmt.Println("  LibreOffice AutoSave extension installed successfully.")
+}
+
+

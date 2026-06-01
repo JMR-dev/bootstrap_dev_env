@@ -905,4 +905,98 @@ func TestEnsurePythonLatestBackgroundInstall(t *testing.T) {
 	}
 }
 
+func TestEnsureLibreOfficeAutoSave(t *testing.T) {
+	defer resetMocks()
+
+	// 1. isMacOS = false, LibreOffice not installed
+	isMacOS = false
+	hasCmd = func(name string) bool {
+		if name == "unopkg" {
+			return false
+		}
+		return true
+	}
+	var calledDownload bool
+	download = func(url, dest string) bool {
+		calledDownload = true
+		return true
+	}
+	ensureLibreOfficeAutoSave()
+	if calledDownload {
+		t.Error("expected download not to be called when unopkg is missing")
+	}
+
+	// 2. isMacOS = true, LibreOffice not installed
+	isMacOS = true
+	osStat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+	calledDownload = false
+	ensureLibreOfficeAutoSave()
+	if calledDownload {
+		t.Error("expected download not to be called when unopkg is missing on macOS")
+	}
+
+	// 3. isMacOS = false, LibreOffice installed, download fails
+	isMacOS = false
+	hasCmd = func(name string) bool {
+		return name == "unopkg"
+	}
+	download = func(url, dest string) bool {
+		return false
+	}
+	var runCmdCalled bool
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdCalled = true
+		return CmdResult{ExitCode: 0}
+	}
+	ensureLibreOfficeAutoSave()
+	if runCmdCalled {
+		t.Error("expected runCmd not to be called when download fails")
+	}
+
+	// 4. isMacOS = false, LibreOffice installed, download succeeds, runCmd fails
+	download = func(url, dest string) bool {
+		return true
+	}
+	var unopkgArgv []string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		unopkgArgv = argv
+		return CmdResult{ExitCode: 1}
+	}
+	ensureLibreOfficeAutoSave()
+	if len(unopkgArgv) == 0 || unopkgArgv[0] != "unopkg" {
+		t.Errorf("expected runCmd with unopkg, got: %v", unopkgArgv)
+	}
+
+	// 5. isMacOS = false, LibreOffice installed, download succeeds, runCmd succeeds
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		unopkgArgv = argv
+		return CmdResult{ExitCode: 0}
+	}
+	ensureLibreOfficeAutoSave()
+	if len(unopkgArgv) == 0 || unopkgArgv[0] != "unopkg" || unopkgArgv[1] != "add" || unopkgArgv[2] != "-f" {
+		t.Errorf("expected runCmd with unopkg add -f, got: %v", unopkgArgv)
+	}
+
+	// 6. isMacOS = true, LibreOffice installed, download succeeds, runCmd succeeds
+	isMacOS = true
+	osStat = func(name string) (os.FileInfo, error) {
+		if name == "/Applications/LibreOffice.app/Contents/MacOS/unopkg" {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		unopkgArgv = argv
+		return CmdResult{ExitCode: 0}
+	}
+	ensureLibreOfficeAutoSave()
+	expectedMacPath := "/Applications/LibreOffice.app/Contents/MacOS/unopkg"
+	if len(unopkgArgv) == 0 || unopkgArgv[0] != expectedMacPath {
+		t.Errorf("expected runCmd with %s, got: %v", expectedMacPath, unopkgArgv)
+	}
+}
+
+
 
