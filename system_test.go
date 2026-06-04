@@ -495,3 +495,36 @@ func TestSystemGoEdgeCases(t *testing.T) {
 	installSystemPackages([]string{"docker-ce"}, []string{})
 }
 
+func TestInstallSystemPackagesAria2First(t *testing.T) {
+	defer resetMocks()
+
+	pkgMgr = "dnf"
+	var runCmdCalls [][]string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdCalls = append(runCmdCalls, argv)
+		return CmdResult{ExitCode: 0}
+	}
+	hasCmd = func(name string) bool {
+		if name == "aria2c" {
+			return false
+		}
+		return true
+	}
+
+	installSystemPackages([]string{"git", "aria2", "tmux"}, []string{})
+
+	if len(runCmdCalls) < 2 {
+		t.Fatalf("expected at least 2 command calls, got %d: %v", len(runCmdCalls), runCmdCalls)
+	}
+
+	firstCall := runCmdCalls[0]
+	if len(firstCall) < 4 || firstCall[0] != "dnf" || firstCall[1] != "install" || firstCall[3] != "aria2" {
+		t.Errorf("expected first call to be installing aria2, got: %v", firstCall)
+	}
+
+	secondCall := runCmdCalls[1]
+	if len(secondCall) < 5 || secondCall[0] != "dnf" || secondCall[1] != "install" || secondCall[3] != "git" || secondCall[4] != "tmux" {
+		t.Errorf("expected second call to install remaining packages, got: %v", secondCall)
+	}
+}
+

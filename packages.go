@@ -10,10 +10,10 @@ package main
 // URL templates use the substitutions described in formatURL.
 
 var SystemPackages = []string{
+	"aria2",
 	"age",
 	"ansible",
 	"ansible-core",
-	"aria2",
 	"btm",
 	"build-essential",
 	"buildah",

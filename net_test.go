@@ -236,3 +236,124 @@ func TestNetRealErrors(t *testing.T) {
 	}
 }
 
+func TestDownloadRealFallbackChain(t *testing.T) {
+	defer resetMocks()
+
+	tmpDir := t.TempDir()
+	destFile := filepath.Join(tmpDir, "out.txt")
+
+	// Case 1: aria2c works
+	var aria2cCalled bool
+	var curlCalled bool
+	hasCmd = func(name string) bool {
+		if name == "aria2c" || name == "curl" {
+			return true
+		}
+		return false
+	}
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		if argv[0] == "aria2c" {
+			aria2cCalled = true
+			_ = os.WriteFile(destFile, []byte("aria2c content"), 0644)
+			return CmdResult{ExitCode: 0}
+		}
+		if argv[0] == "curl" {
+			curlCalled = true
+			return CmdResult{ExitCode: 0}
+		}
+		return CmdResult{ExitCode: 1}
+	}
+
+	success := downloadReal("https://example.com/file", destFile)
+	if !success {
+		t.Fatal("expected download via aria2c to succeed")
+	}
+	if !aria2cCalled {
+		t.Error("expected aria2c to be called")
+	}
+	if curlCalled {
+		t.Error("expected curl NOT to be called when aria2c succeeds")
+	}
+
+	// Case 2: aria2c fails, falls back to curl, curl succeeds
+	resetMocks()
+	aria2cCalled = false
+	curlCalled = false
+	hasCmd = func(name string) bool {
+		if name == "aria2c" || name == "curl" {
+			return true
+		}
+		return false
+	}
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		if argv[0] == "aria2c" {
+			aria2cCalled = true
+			return CmdResult{ExitCode: 1, Err: fmt.Errorf("aria2c simulated error")}
+		}
+		if argv[0] == "curl" {
+			curlCalled = true
+			_ = os.WriteFile(destFile, []byte("curl content"), 0644)
+			return CmdResult{ExitCode: 0}
+		}
+		return CmdResult{ExitCode: 1}
+	}
+
+	success = downloadReal("https://example.com/file", destFile)
+	if !success {
+		t.Fatal("expected download to succeed via curl fallback")
+	}
+	if !aria2cCalled {
+		t.Error("expected aria2c to be attempted")
+	}
+	if !curlCalled {
+		t.Error("expected curl to be attempted after aria2c failed")
+	}
+
+	// Case 3: aria2c fails, curl fails, falls back to Go HTTP client
+	resetMocks()
+	aria2cCalled = false
+	curlCalled = false
+	hasCmd = func(name string) bool {
+		if name == "aria2c" || name == "curl" {
+			return true
+		}
+		return false
+	}
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		if argv[0] == "aria2c" {
+			aria2cCalled = true
+			return CmdResult{ExitCode: 1, Err: fmt.Errorf("aria2c simulated error")}
+		}
+		if argv[0] == "curl" {
+			curlCalled = true
+			return CmdResult{ExitCode: 1, Err: fmt.Errorf("curl simulated error")}
+		}
+		return CmdResult{ExitCode: 1}
+	}
+	oldTransport := httpClient.Transport
+	defer func() { httpClient.Transport = oldTransport }()
+	httpClient.Transport = &mockTripper{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBufferString("go http content")),
+			}, nil
+		},
+	}
+
+	success = downloadReal("https://example.com/file", destFile)
+	if !success {
+		t.Fatal("expected download to succeed via Go http fallback")
+	}
+	if !aria2cCalled {
+		t.Error("expected aria2c to be attempted")
+	}
+	if !curlCalled {
+		t.Error("expected curl to be attempted")
+	}
+	data, _ := os.ReadFile(destFile)
+	if string(data) != "go http content" {
+		t.Errorf("expected file content to be 'go http content', got %q", string(data))
+	}
+}
+
