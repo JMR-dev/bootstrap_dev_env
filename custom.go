@@ -132,6 +132,9 @@ func isCustomPkgInstalled(pkg *CustomPackage) (bool, string) {
 	if name == "playwright" {
 		return npmInstalled("playwright")
 	}
+	if name == "mdts" {
+		return npmInstalled("mdts")
+	}
 	raw := pkg.InstallPath
 	if raw == "" {
 		raw = defaultInstallPath(pkg)
@@ -574,6 +577,7 @@ func nodeDependentPkgs() map[string]bool {
 		"codex":      true,
 		"copilot":    true,
 		"playwright": true,
+		"mdts":       true,
 	}
 }
 
@@ -697,6 +701,7 @@ func installNpmToolsBatch(pkgs []*CustomPackage) {
 		"codex":      "@openai/codex",
 		"copilot":    "@github/copilot",
 		"playwright": "playwright",
+		"mdts":       "mdts",
 	}
 
 	var npmPkgs []string

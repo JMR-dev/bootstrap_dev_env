@@ -151,6 +151,7 @@ func customPackages() []CustomPackage {
 		{Name: "codex"},
 		{Name: "copilot"},
 		{Name: "playwright"},
+		{Name: "mdts"},
 		{Name: "gh-repo-bootstrap"},
 		{
 			Name:        "rustup",

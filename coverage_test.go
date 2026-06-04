@@ -241,9 +241,9 @@ func TestNpmInstalledNotFound(t *testing.T) {
 func TestIsCustomPkgInstalledNpmNames(t *testing.T) {
 	defer resetMocks()
 	hasCmd = func(name string) bool {
-		return name == "claude" || name == "codex" || name == "copilot" || name == "playwright"
+		return name == "claude" || name == "codex" || name == "copilot" || name == "playwright" || name == "mdts"
 	}
-	for _, name := range []string{"claude", "codex", "copilot", "playwright"} {
+	for _, name := range []string{"claude", "codex", "copilot", "playwright", "mdts"} {
 		ok, _ := isCustomPkgInstalled(&CustomPackage{Name: name})
 		if !ok {
 			t.Errorf("expected %s detected as installed", name)
