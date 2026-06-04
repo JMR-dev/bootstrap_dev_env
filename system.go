@@ -458,6 +458,38 @@ func brewInstallMany(pkgs []string) (failed []string) {
 func installSystemPackages(regular, special []string) {
 	fmt.Println("\n=== System Packages ===")
 
+	// Ensure aria2 is installed first and on the system path
+	var installAria2 bool
+	var remainingRegular []string
+	for _, p := range regular {
+		if p == "aria2" {
+			installAria2 = true
+		} else {
+			remainingRegular = append(remainingRegular, p)
+		}
+	}
+
+	if installAria2 || !hasCmd("aria2c") {
+		fmt.Println("  Ensuring aria2 is installed first and on the system path ...")
+		var res CmdResult
+		switch pkgMgr {
+		case "brew":
+			res = runCmd([]string{"brew", "install", "aria2"}, CmdOpts{})
+		case "pacman":
+			res = runCmd([]string{"pacman", "-S", "--noconfirm", "--needed", "aria2"}, CmdOpts{AsSudo: true})
+		default: // dnf, apt-get
+			res = runCmd([]string{pkgMgr, "install", "-y", "aria2"}, CmdOpts{AsSudo: true})
+		}
+		if !res.OK() {
+			warn(fmt.Sprintf("Failed to install aria2: %v", res.Err))
+		} else if !hasCmd("aria2c") {
+			warn("aria2 was installed but 'aria2c' is not found on the system path")
+		} else {
+			fmt.Println("  aria2 is installed and on the system path.")
+		}
+		regular = remainingRegular
+	}
+
 	if pkgMgr == "brew" {
 		failed := pkgInstallMany(regular)
 		for _, p := range failed {

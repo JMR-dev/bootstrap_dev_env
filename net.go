@@ -19,7 +19,31 @@ var httpClient = &http.Client{Timeout: httpClientTimeout}
 
 // downloadReal streams url -> dest. Returns true on success.
 func downloadReal(url, dest string) bool {
-	fmt.Printf("  Downloading %s ...\n", filepath.Base(url))
+	taskPrintf("  Downloading %s ...\n", filepath.Base(url))
+
+	dir, file := filepath.Split(dest)
+	dir = filepath.Clean(dir)
+
+	// Try aria2c first if available
+	if hasCmd("aria2c") {
+		res := runCmd([]string{"aria2c", "-x", "16", "-s", "16", "-k", "1M", "-d", dir, "-o", file, url}, CmdOpts{Out: taskOut()})
+		if res.OK() {
+			return true
+		}
+		taskPrintf("  [WARN] aria2c download failed for %s, falling back to curl ...\n", url)
+	}
+
+	// Fallback to curl
+	if hasCmd("curl") {
+		res := runCmd([]string{"curl", "-L", "--fail", "-o", dest, url}, CmdOpts{Out: taskOut()})
+		if res.OK() {
+			return true
+		}
+		taskPrintf("  [WARN] curl download failed for %s ...\n", url)
+	}
+
+	// Final fallback: Go built-in HTTP client
+	taskPrintf("  Falling back to built-in HTTP client for %s ...\n", url)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		errLog(fmt.Sprintf("Download failed for %s: %v", url, err))
