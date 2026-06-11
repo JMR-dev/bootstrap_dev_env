@@ -1,10 +1,13 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Special packages: installed outside the regular package manager because
@@ -18,6 +21,9 @@ func specialPkgs() map[string]bool {
 		"github-desktop": true, "zoom": true, "obsidian": true,
 		"minikube": true, "pipx": true,
 		"poetry": true, "pulumi": true, "semgrep": true,
+		"nvidia-drivers": true, "cuda-toolkit": true,
+		"nvidia-container-toolkit": true, "ollama": true,
+		"huggingface-cli": true,
 	}
 }
 
@@ -51,6 +57,16 @@ func isSpecialPkgInstalled(pkg string) bool {
 		return hasCmd("poetry")
 	case "semgrep":
 		return hasCmd("semgrep")
+	case "nvidia-drivers":
+		return hasCmd("nvidia-smi")
+	case "cuda-toolkit":
+		return hasCmd("nvcc") || exists("/usr/local/cuda/bin/nvcc")
+	case "nvidia-container-toolkit":
+		return hasCmd("nvidia-ctk")
+	case "ollama":
+		return hasCmd("ollama")
+	case "huggingface-cli":
+		return hasCmd("huggingface-cli")
 	}
 	return isSystemPkgInstalled(pkg)
 }
@@ -357,6 +373,158 @@ func installSpecialPkg(pkg, tmp string) {
 		installPoetry(tmp)
 	case "semgrep":
 		installSemgrep(tmp)
+	case "nvidia-drivers":
+		installNvidiaDrivers()
+	case "cuda-toolkit":
+		installCUDAToolkit()
+	case "nvidia-container-toolkit":
+		installNvidiaContainerToolkit()
+	case "ollama":
+		installOllama()
+	case "huggingface-cli":
+		installHuggingFaceCLI()
+	}
+}
+
+func installNvidiaDrivers() {
+	if pkgMgr != "apt-get" {
+		errLog("nvidia-drivers can only be automatically installed via apt-get on Ubuntu/Debian")
+		return
+	}
+	fmt.Println("  Installing NVIDIA driver (nvidia-driver-550) ...")
+	res := pkgInstall("nvidia-driver-550")
+	if !res.OK() {
+		errLog(fmt.Sprintf("failed to install nvidia-driver-550: %v", res.Err))
+	}
+}
+
+func installCUDAToolkit() {
+	if pkgMgr != "apt-get" {
+		errLog("cuda-toolkit can only be automatically installed via apt-get on Ubuntu/Debian")
+		return
+	}
+	fmt.Println("  Setting up CUDA repository keyring ...")
+	setupCUDARepo()
+	fmt.Println("  Installing cuda-toolkit ...")
+	res := pkgInstall("cuda-toolkit")
+	if !res.OK() {
+		errLog(fmt.Sprintf("failed to install cuda-toolkit: %v", res.Err))
+		return
+	}
+	fmt.Println("  Configuring system path for CUDA ...")
+	appendProfileLine("cuda", `export PATH="/usr/local/cuda/bin:$PATH"`)
+	appendProfileLine("cuda", `export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"`)
+}
+
+func installNvidiaContainerToolkit() {
+	if pkgMgr != "apt-get" {
+		errLog("nvidia-container-toolkit can only be automatically installed via apt-get on Ubuntu/Debian")
+		return
+	}
+	fmt.Println("  Setting up NVIDIA Container Toolkit repository ...")
+	setupNvidiaContainerToolkitRepo()
+	fmt.Println("  Installing nvidia-container-toolkit ...")
+	res := pkgInstall("nvidia-container-toolkit")
+	if !res.OK() {
+		errLog(fmt.Sprintf("failed to install nvidia-container-toolkit: %v", res.Err))
+		return
+	}
+	fmt.Println("  Configuring Docker runtime for NVIDIA Container Toolkit ...")
+	configureRes := runCmd([]string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"}, CmdOpts{AsSudo: true})
+	if !configureRes.OK() {
+		warn(fmt.Sprintf("failed to configure docker runtime: %v", configureRes.Err))
+	}
+	fmt.Println("  Restarting Docker service ...")
+	restartRes := runCmd([]string{"systemctl", "restart", "docker"}, CmdOpts{AsSudo: true})
+	if !restartRes.OK() {
+		warn(fmt.Sprintf("failed to restart docker service: %v", restartRes.Err))
+	}
+}
+
+func installOllama() {
+	fmt.Println("  Installing Ollama via official install script ...")
+	res := runShell("curl -fsSL https://ollama.com/install.sh | sh", CmdOpts{})
+	if !res.OK() {
+		errLog(fmt.Sprintf("Ollama installation failed: %v", res.Err))
+		return
+	}
+
+	isCI := os.Getenv("BOOTSTRAP_CI") == "true"
+	if isCI {
+		fmt.Println("  [CI] Skipping pulling large Ollama models in integration test container.")
+		return
+	}
+
+	// Pull Gemma 4 E4B and Qwen2.5-Coder 7B
+	fmt.Println("  Pulling Gemma 4 E4B and Qwen2.5-Coder 7B models ...")
+
+	isTesting := flag.Lookup("test.v") != nil || os.Getenv("GO_ENV") == "test"
+	serverRunning := false
+
+	// Check if Ollama server is already responding
+	for i := 0; i < 5; i++ {
+		r := runCmd([]string{"ollama", "list"}, CmdOpts{Capture: true})
+		if r.OK() {
+			serverRunning = true
+			break
+		}
+		if isTesting {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	var cmd *exec.Cmd
+	if !serverRunning && !isTesting {
+		fmt.Println("  Ollama server not running. Starting in background for model pulling ...")
+		cmd = exec.Command("ollama", "serve")
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		if err := cmd.Start(); err != nil {
+			warn(fmt.Sprintf("Failed to start Ollama server in background: %v", err))
+		} else {
+			// Wait up to 30 seconds for server to start
+			for i := 0; i < 30; i++ {
+				r := runCmd([]string{"ollama", "list"}, CmdOpts{Capture: true})
+				if r.OK() {
+					serverRunning = true
+					break
+				}
+				time.Sleep(1 * time.Second)
+			}
+		}
+	}
+
+	if serverRunning || isTesting {
+		fmt.Println("  Pulling Gemma 4 E4B (gemma4:e4b) ...")
+		pull1 := runCmd([]string{"ollama", "pull", "gemma4:e4b"}, CmdOpts{})
+		if !pull1.OK() {
+			errLog(fmt.Sprintf("Failed to pull gemma4:e4b: %v", pull1.Err))
+		}
+		fmt.Println("  Pulling Qwen2.5-Coder 7B (qwen2.5-coder:7b) ...")
+		pull2 := runCmd([]string{"ollama", "pull", "qwen2.5-coder:7b"}, CmdOpts{})
+		if !pull2.OK() {
+			errLog(fmt.Sprintf("Failed to pull qwen2.5-coder:7b: %v", pull2.Err))
+		}
+	} else {
+		errLog("Ollama server failed to start — cannot pull models")
+	}
+
+	if cmd != nil && cmd.Process != nil {
+		fmt.Println("  Stopping background Ollama server ...")
+		cmd.Process.Kill()
+	}
+}
+
+func installHuggingFaceCLI() {
+	if !hasCmd("pipx") {
+		errLog("pipx is not installed — cannot install huggingface-cli")
+		return
+	}
+	fmt.Println("  Installing huggingface-cli via pipx ...")
+	res := runCmd([]string{"pipx", "install", "huggingface_hub[cli]"}, CmdOpts{})
+	if !res.OK() {
+		errLog(fmt.Sprintf("failed to install huggingface-cli: %v", res.Err))
 	}
 }
 

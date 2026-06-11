@@ -528,3 +528,69 @@ func TestInstallSystemPackagesAria2First(t *testing.T) {
 	}
 }
 
+func TestInstallLocalAISpecialPkgs(t *testing.T) {
+	defer resetMocks()
+
+	pkgMgr = "apt-get"
+	isMacOS = false
+
+	var runCmdCalls [][]string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdCalls = append(runCmdCalls, argv)
+		return CmdResult{ExitCode: 0}
+	}
+
+	var runShellCalls []string
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		runShellCalls = append(runShellCalls, cmd)
+		return CmdResult{ExitCode: 0}
+	}
+
+	// 1. nvidia-drivers
+	installSpecialPkg("nvidia-drivers", "/tmp")
+	if len(runCmdCalls) != 1 || runCmdCalls[0][0] != "apt-get" || runCmdCalls[0][3] != "nvidia-driver-550" {
+		t.Errorf("expected apt-get install nvidia-driver-550, got calls: %v", runCmdCalls)
+	}
+
+	// 2. cuda-toolkit
+	runCmdCalls = nil
+	runShellCalls = nil
+	installSpecialPkg("cuda-toolkit", "/tmp")
+	if len(runCmdCalls) < 1 || runCmdCalls[0][3] != "cuda-toolkit" {
+		t.Errorf("expected apt-get install cuda-toolkit, got calls: %v", runCmdCalls)
+	}
+	if len(runShellCalls) != 1 || !strings.Contains(runShellCalls[0], "cuda-keyring") {
+		t.Errorf("expected setupCUDARepo runShell call, got calls: %v", runShellCalls)
+	}
+
+	// 3. nvidia-container-toolkit
+	runCmdCalls = nil
+	runShellCalls = nil
+	installSpecialPkg("nvidia-container-toolkit", "/tmp")
+	if len(runCmdCalls) < 3 || runCmdCalls[0][3] != "nvidia-container-toolkit" {
+		t.Errorf("expected apt-get install nvidia-container-toolkit, got calls: %v", runCmdCalls)
+	}
+	if len(runShellCalls) != 1 || !strings.Contains(runShellCalls[0], "nvidia-container-toolkit.list") {
+		t.Errorf("expected setupNvidiaContainerToolkitRepo runShell call, got calls: %v", runShellCalls)
+	}
+
+	// 4. ollama
+	runCmdCalls = nil
+	runShellCalls = nil
+	installSpecialPkg("ollama", "/tmp")
+	if len(runShellCalls) != 1 || !strings.Contains(runShellCalls[0], "ollama.com/install.sh") {
+		t.Errorf("expected ollama installer runShell call, got calls: %v", runShellCalls)
+	}
+
+	// 5. huggingface-cli
+	runCmdCalls = nil
+	runShellCalls = nil
+	hasCmd = func(name string) bool {
+		return name == "pipx"
+	}
+	installSpecialPkg("huggingface-cli", "/tmp")
+	if len(runCmdCalls) != 1 || runCmdCalls[0][0] != "pipx" || runCmdCalls[0][2] != "huggingface_hub[cli]" {
+		t.Errorf("expected pipx install huggingface_hub[cli], got calls: %v", runCmdCalls)
+	}
+}
+

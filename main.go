@@ -42,6 +42,7 @@ func runMain(args []string) {
 	gui := fs.Bool("gui", false, "Include GUI applications (headed environments).")
 	noVM := fs.Bool("no-vm", false, "macOS only: skip provisioning the Fedora-on-QEMU VM that backs the firecracker() zsh wrapper.")
 	noAI := fs.Bool("no-ai", false, "Skip installation of LLM/AI CLI tools (agy, claude, codex, copilot).")
+	localAI := fs.Bool("local-ai", false, "Ubuntu only: Install local ML inference environment (Nvidia drivers, CUDA, Nvidia Container Toolkit, Ollama, Hugging Face CLI).")
 	_ = fs.Parse(args[1:])
 
 	switch *only {
@@ -54,19 +55,58 @@ func runMain(args []string) {
 
 	initPkgMgr()
 
+	if *localAI {
+		if isMacOS || pkgMgr != "apt-get" {
+			fmt.Fprintln(os.Stderr, "Error: --local-ai flag is only supported on Ubuntu/Debian (apt-get package manager)")
+			osExit(1)
+			return
+		}
+	}
+
 	systemPkgs := append([]string(nil), SystemPackages...)
 	flatpakPkgs := append([]string(nil), FlatpakPackages...)
+
+	if *localAI {
+		var filteredSys []string
+		excludeSys := map[string]bool{
+			"ansible": true, "ansible-core": true, "buildah": true,
+			"dotnet-sdk-10.0": true, "helm": true, "kubectl": true,
+			"minikube": true, "pulumi": true, "sops": true,
+			"vagrant": true, "virt-manager": true, "wireshark": true,
+			"zoom": true, "obs-studio": true, "webcamoid": true,
+			"obsidian": true,
+		}
+		for _, p := range systemPkgs {
+			if !excludeSys[p] {
+				filteredSys = append(filteredSys, p)
+			}
+		}
+		filteredSys = append(filteredSys, "nvidia-drivers", "cuda-toolkit", "nvidia-container-toolkit", "ollama", "huggingface-cli")
+		systemPkgs = filteredSys
+		flatpakPkgs = nil
+	}
+
 	custom := customPackages()
 	customPtrs := make([]*CustomPackage, 0, len(custom))
 	for i := range custom {
+		name := strings.ToLower(custom[i].Name)
 		// Drop firecracker on macOS — it's provisioned inside the Fedora VM
 		// (see setupFirecrackerVM), not on the host.
-		if isMacOS && strings.ToLower(custom[i].Name) == "firecracker" {
+		if isMacOS && name == "firecracker" {
 			continue
 		}
 		if *noAI {
-			name := strings.ToLower(custom[i].Name)
 			if name == "agy" || name == "claude" || name == "codex" || name == "copilot" {
+				continue
+			}
+		}
+		if *localAI {
+			excludeCust := map[string]bool{
+				"go": true, "zig": true, "rustup": true, "dagger": true,
+				"cosign": true, "agy": true, "claude": true, "copilot": true,
+				"codex": true, "playwright": true,
+			}
+			if excludeCust[name] {
 				continue
 			}
 		}
