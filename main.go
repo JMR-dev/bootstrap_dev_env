@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,6 +107,55 @@ func runMain(args []string) {
 
 	doFlatpak := (*only == "" || *only == "flatpak") && *gui && !isMacOS
 
+	step := 0
+	if !disableProgressTracking {
+		step = readProgressStep()
+		if step >= 2 {
+			fmt.Println("\nBootstrap is already completed according to progress.config.")
+			fmt.Println("If you want to re-run, delete or reset progress.config.")
+			return
+		}
+	}
+
+	originalSystemPkgs := systemPkgs
+	originalCustomPtrs := customPtrs
+	originalDoFlatpak := doFlatpak
+	originalFlatpakPkgs := flatpakPkgs
+
+	if !disableProgressTracking && step == 0 {
+		// Minimum required system packages: zsh, git, curl
+		step1Sys := map[string]bool{"zsh": true, "git": true, "curl": true}
+		var keptSys []string
+		for _, p := range systemPkgs {
+			if step1Sys[p] {
+				keptSys = append(keptSys, p)
+			}
+		}
+		systemPkgs = keptSys
+
+		// Minimum required custom packages: oh-my-zsh
+		var keptCust []*CustomPackage
+		for _, p := range customPtrs {
+			if strings.ToLower(p.Name) == "oh-my-zsh" {
+				keptCust = append(keptCust, p)
+			}
+		}
+		customPtrs = keptCust
+
+		// No flatpaks in Step 1
+		flatpakPkgs = nil
+		doFlatpak = false
+	} else if !disableProgressTracking && step == 1 {
+		// Exclude oh-my-zsh in Step 2
+		var keptCust []*CustomPackage
+		for _, p := range customPtrs {
+			if strings.ToLower(p.Name) != "oh-my-zsh" {
+				keptCust = append(keptCust, p)
+			}
+		}
+		customPtrs = keptCust
+	}
+
 	sysCheck, flatCheck, custCheck := checkAllInParallel(
 		*only == "" || *only == "system", systemPkgs,
 		doFlatpak, flatpakPkgs,
@@ -114,7 +164,52 @@ func runMain(args []string) {
 
 	total := printCheckSummary(sysCheck, flatCheck, custCheck, *only)
 
+	if !disableProgressTracking && step == 0 {
+		// If we didn't need to install anything for step 1, and default shell is already zsh,
+		// we can skip step 1 and proceed to step 2 in the same run.
+		if total == 0 && isZshDefault() {
+			fmt.Println("\n[zsh/oh-my-zsh] Zsh and oh-my-zsh already installed and default shell is zsh. Proceeding to Step 2...")
+			if err := writeProgressStep(1); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to write progress: %v\n", err)
+			}
+			step = 1
+			// Restore original packages for Step 2
+			systemPkgs = originalSystemPkgs
+			flatpakPkgs = originalFlatpakPkgs
+			doFlatpak = originalDoFlatpak
+
+			// Exclude oh-my-zsh
+			var keptCust []*CustomPackage
+			for _, p := range originalCustomPtrs {
+				if strings.ToLower(p.Name) != "oh-my-zsh" {
+					keptCust = append(keptCust, p)
+				}
+			}
+			customPtrs = keptCust
+
+			// Re-run checks for Step 2
+			sysCheck, flatCheck, custCheck = checkAllInParallel(
+				*only == "" || *only == "system", systemPkgs,
+				doFlatpak, flatpakPkgs,
+				*only == "" || *only == "custom", customPtrs,
+			)
+			total = printCheckSummary(sysCheck, flatCheck, custCheck, *only)
+		}
+	}
+
 	if total == 0 {
+		if !disableProgressTracking && step == 0 {
+			// Zsh, git, curl and oh-my-zsh are installed, but default shell is not zsh.
+			ensureZshDefault()
+			if err := writeProgressStep(1); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to write progress: %v\n", err)
+			}
+			fmt.Println("\n[zsh] Default shell has been updated to zsh.")
+			fmt.Println("IMPORTANT: Please log out of your current session and log back in (or restart your terminal) for the shell change to take effect.")
+			fmt.Println("Once logged back in, please re-run the bootstrapper to complete the rest of the installation.")
+			osExit(0)
+			return
+		}
 		fmt.Println("\nAll packages already installed.")
 		writeRunLog()
 		return
@@ -129,9 +224,30 @@ func runMain(args []string) {
 	checkSudo()
 	promptGitHubToken()
 
+	if !disableProgressTracking && step == 0 {
+		// Run only Step 1: minimum required system packages, default shell, minimum custom packages (oh-my-zsh)
+		if *only == "" || *only == "system" {
+			installSystemPackages(sysCheck.toInstallRegular, sysCheck.toInstallSpecial)
+			ensureZshDefault()
+		}
+		if *only == "" || *only == "custom" {
+			installCustomPackages(custCheck.toInstall)
+		}
+		if err := writeProgressStep(1); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write progress: %v\n", err)
+		}
+		fmt.Println("\n[zsh/oh-my-zsh] Step 1 of bootstrap completed successfully.")
+		fmt.Println("IMPORTANT: Please log out of your current session and log back in (or restart your terminal) so that zsh becomes your active shell.")
+		fmt.Println("Once logged back in, please re-run the bootstrapper to complete the rest of the installation.")
+		osExit(0)
+		return
+	}
+
 	if *only == "" || *only == "system" {
 		installSystemPackages(sysCheck.toInstallRegular, sysCheck.toInstallSpecial)
-		ensureZshDefault()
+		if disableProgressTracking {
+			ensureZshDefault()
+		}
 	}
 
 	if doFlatpak {
@@ -159,6 +275,12 @@ func runMain(args []string) {
 	if pyenvWG != nil {
 		fmt.Println("\n[pyenv] Waiting for background Python install to finish ...")
 		pyenvWG.Wait()
+	}
+
+	if !disableProgressTracking {
+		if err := writeProgressStep(2); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write progress: %v\n", err)
+		}
 	}
 
 	writeRunLog()
@@ -240,3 +362,39 @@ func checkSudo() {
 		return
 	}
 }
+
+var progressConfigPathReal = func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "progress.config"
+	}
+	return filepath.Join(filepath.Dir(exe), "progress.config")
+}
+
+var progressConfigPath = progressConfigPathReal
+
+func readProgressStep() int {
+	path := progressConfigPath()
+	data, err := osReadFile(path)
+	if err != nil {
+		return 0
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "step=") {
+			stepStr := strings.TrimPrefix(line, "step=")
+			if step, err := strconv.Atoi(stepStr); err == nil {
+				return step
+			}
+		}
+	}
+	return 0
+}
+
+func writeProgressStep(step int) error {
+	path := progressConfigPath()
+	content := fmt.Sprintf("step=%d\n", step)
+	return osWriteFile(path, []byte(content), 0o644)
+}
+

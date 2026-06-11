@@ -12,5 +12,6 @@ import (
 // (GitHub Actions auto-annotates "[ERROR]" lines as workflow errors).
 func TestMain(m *testing.M) {
 	issueLogWriter = io.Discard
+	disableProgressTracking = true
 	os.Exit(m.Run())
 }
