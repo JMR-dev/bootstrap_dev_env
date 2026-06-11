@@ -244,3 +244,42 @@ func repoGroups() []repoGroup {
 		{mk("lazygit"), setupLazygitCoprRepo},
 	}
 }
+
+func setupCUDARepo() {
+	if pkgMgr != "apt-get" {
+		return
+	}
+	if repoFileExists("/etc/apt/sources.list.d/cuda.list") || repoFileExists("/etc/apt/sources.list.d/cuda-keyring.list") {
+		return
+	}
+	versionID := strings.Trim(osReleaseField("VERSION_ID"), `"`)
+	ubuntuVer := strings.ReplaceAll(versionID, ".", "")
+	if ubuntuVer == "" {
+		ubuntuVer = "2204"
+	}
+	debURL := fmt.Sprintf("https://developer.download.nvidia.com/compute/cuda/repos/ubuntu%s/x86_64/cuda-keyring_1.1-1_all.deb", ubuntuVer)
+	runShell(
+		fmt.Sprintf("curl -fsSL %s -o /tmp/cuda-keyring.deb && "+
+			"sudo dpkg -i /tmp/cuda-keyring.deb && "+
+			"sudo apt-get update", debURL),
+		CmdOpts{},
+	)
+}
+
+func setupNvidiaContainerToolkitRepo() {
+	if pkgMgr != "apt-get" {
+		return
+	}
+	if repoFileExists("/etc/apt/sources.list.d/nvidia-container-toolkit.list") {
+		return
+	}
+	runShell(
+		"curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | "+
+			"sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && "+
+			"curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | "+
+			"sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | "+
+			"sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null && "+
+			"sudo apt-get update",
+		CmdOpts{},
+	)
+}

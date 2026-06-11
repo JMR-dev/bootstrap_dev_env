@@ -2,6 +2,7 @@ name: Integration Tests
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  BOOTSTRAP_CI: 'true'
 
 on:
   push:
@@ -19,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [debian, arch, fedora]
+        os: [debian, arch, fedora, ubuntu]
       fail-fast: false
 
     steps:

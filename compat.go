@@ -31,4 +31,7 @@ var (
 	// Filesystem paths
 	osReleasePath = "/etc/os-release"
 	passwdPath    = "/etc/passwd"
+
+	// Testing override
+	disableProgressTracking = false
 )

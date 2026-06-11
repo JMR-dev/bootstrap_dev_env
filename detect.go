@@ -19,6 +19,7 @@ var (
 	isMacOS      bool
 	isRHELFamily bool
 	isArchFamily bool
+	isTesting    bool
 )
 
 func init() {

@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	osFlag := flag.String("os", "all", "OS to test (debian, arch, fedora, or all)")
+	osFlag := flag.String("os", "all", "OS to test (debian, arch, fedora, ubuntu, or all)")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -47,10 +47,12 @@ func main() {
 		targets = []string{"archlinux:latest"}
 	case "fedora":
 		targets = []string{"fedora:latest"}
+	case "ubuntu":
+		targets = []string{"ubuntu:latest"}
 	case "all":
-		targets = []string{"debian:latest", "archlinux:latest", "fedora:latest"}
+		targets = []string{"debian:latest", "archlinux:latest", "fedora:latest", "ubuntu:latest"}
 	default:
-		fmt.Fprintf(os.Stderr, "Unsupported OS: %s. Supported: debian, arch, fedora, all\n", *osFlag)
+		fmt.Fprintf(os.Stderr, "Unsupported OS: %s. Supported: debian, arch, fedora, ubuntu, all\n", *osFlag)
 		os.Exit(1)
 	}
 
@@ -63,22 +65,27 @@ func main() {
 
 			// 1. Prepare target container base and setup script based on OS distro
 			var testContainer *dagger.Container
-			if strings.Contains(target, "debian") {
+			if strings.Contains(target, "debian") || strings.Contains(target, "ubuntu") {
 				testContainer = client.Container().
 					From(target).
 					WithExec([]string{"apt-get", "update"}).
-					WithExec([]string{"apt-get", "install", "-y", "sudo", "curl", "git", "wget", "tar", "unzip", "xz-utils", "make", "python3", "which"})
+					WithExec([]string{"apt-get", "install", "-y", "sudo", "curl", "git", "wget", "tar", "unzip", "xz-utils", "make", "python3", "which", "zstd"})
 			} else if strings.Contains(target, "fedora") {
 				testContainer = client.Container().
 					From(target).
-					WithExec([]string{"dnf", "install", "-y", "sudo", "curl", "git", "wget", "tar", "unzip", "xz", "make", "python3", "which"})
+					WithExec([]string{"dnf", "install", "-y", "sudo", "curl", "git", "wget", "tar", "unzip", "xz", "make", "python3", "which", "zstd"})
 			} else if strings.Contains(target, "archlinux") {
 				testContainer = client.Container().
 					From(target).
-					WithExec([]string{"pacman", "-Sy", "--noconfirm", "sudo", "curl", "git", "wget", "tar", "unzip", "xz", "make", "python", "which"})
+					WithExec([]string{"pacman", "-Sy", "--noconfirm", "sudo", "curl", "git", "wget", "tar", "unzip", "xz", "make", "python", "which", "zstd"})
 			} else {
 				return fmt.Errorf("unsupported target OS: %s", target)
 			}
+
+			// Mock sync to prevent hangs during package updates/update-shells on overlayfs/FUSE
+			testContainer = testContainer.
+				WithExec([]string{"ln", "-sf", "/bin/true", "/bin/sync"}).
+				WithExec([]string{"ln", "-sf", "/bin/true", "/usr/bin/sync"})
 
 			// 2. Pre-create the ~/.pyenv directory to skip python source compilation in integration test (saves ~10 minutes)
 			testContainer = testContainer.WithExec([]string{"mkdir", "-p", "/root/.pyenv"})
@@ -88,6 +95,10 @@ func main() {
 				WithFile("/usr/local/bin/bootstrap_environment", binaryFile).
 				WithWorkdir("/tmp")
 
+			if val := os.Getenv("BOOTSTRAP_CI"); val != "" {
+				testContainer = testContainer.WithEnvVariable("BOOTSTRAP_CI", val)
+			}
+
 			// Forward GitHub token so API calls are authenticated (avoids 403 rate-limits)
 			if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
 				secret := client.SetSecret("github-token", tok)
@@ -96,28 +107,53 @@ func main() {
 					WithSecretVariable("GH_TOKEN", secret)
 			}
 
-			// 4. Run bootstrap binary against the full package set (no scope flags).
+			// 4. Run bootstrap binary.
+			// We run it twice:
+			// Run 1: Step 1 (zsh, git, curl, oh-my-zsh) which configures the default shell and exits.
+			// Run 2: Step 2 (the rest of the packages) once the shell configuration is complete.
 			// We pipe 'y' to satisfy the "Proceed? [y/N]" prompt.
-			fmt.Printf("[%s] Executing bootstrap_environment...\n", target)
-			testContainer = testContainer.WithExec([]string{"sh", "-c", "echo y | bootstrap_environment --gui"})
+			var bootstrapCmd []string
+			if strings.Contains(target, "ubuntu") {
+				bootstrapCmd = []string{"sh", "-c", "echo y | bootstrap_environment --local-ai"}
+			} else {
+				bootstrapCmd = []string{"sh", "-c", "echo y | bootstrap_environment --gui"}
+			}
+
+			fmt.Printf("[%s] Executing bootstrap_environment (Run 1: ZSH/Step 1)...\n", target)
+			testContainer = testContainer.WithExec(bootstrapCmd)
+
+			fmt.Printf("[%s] Executing bootstrap_environment (Run 2: Step 2)...\n", target)
+			testContainer = testContainer.WithExec(bootstrapCmd)
 
 			// 5. Verify all installed custom packages return a path and zero exit code from version command
 			fmt.Printf("[%s] Verifying package installations on PATH and running version checks...\n", target)
-			verifyCmd := []string{
-				"sh", "-c",
-				"set -e -x; " +
-					"export PATH=$PATH:/usr/local/go/bin:/usr/local/bin; " +
-					"which go && go version && " +
-					"which nvim && nvim --version && " +
-					"which zig && zig version && " +
-					"which firecracker && firecracker --version",
+			var verifyCmd []string
+			if strings.Contains(target, "ubuntu") {
+				verifyCmd = []string{
+					"sh", "-c",
+					"set -e -x; " +
+						"export PATH=$PATH:/usr/local/bin:/root/.local/bin; " +
+						"which nvim && nvim --version && " +
+						"which firecracker && firecracker --version && " +
+						"which ollama && ollama --version && " +
+						"which hf && hf --help",
+				}
+			} else {
+				verifyCmd = []string{
+					"sh", "-c",
+					"set -e -x; " +
+						"export PATH=$PATH:/usr/local/go/bin:/usr/local/bin; " +
+						"which go && go version && " +
+						"which nvim && nvim --version && " +
+						"which zig && zig version && " +
+						"which firecracker && firecracker --version",
+				}
 			}
 			verifyOutput, err := testContainer.WithExec(verifyCmd).Stdout(ctx)
 			if err != nil {
 				// To see the stdout/stderr of the failing command, we can try to extract it from dagger's ExecError
 				return fmt.Errorf("verification failed on %s: %v", target, err)
 			}
-
 
 			fmt.Printf("[%s] Verification Output:\n%s\n", target, verifyOutput)
 			fmt.Printf("--- PASS: Integration test on %s completed successfully ---\n", target)

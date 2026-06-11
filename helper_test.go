@@ -23,19 +23,21 @@ func resetMocks() {
 	osRemove = os.Remove
 	osRemoveAll = os.RemoveAll
 	osExit = os.Exit
+	progressConfigPath = progressConfigPathReal
 	// Default to an empty reader so un-mocked tests don't hang waiting for user input.
 	stdin = strings.NewReader("")
 	readPassword = func() ([]byte, error) {
 		return nil, errors.New("terminal blocked in test")
 	}
 
-	// Reset global state variables to safe defaults
 	isMacOS = false
 	pkgMgr = "dnf"
 	isRHELFamily = true
 	isArchFamily = false
 	osName = "linux"
 	archName = "x86_64"
+
+	disableProgressTracking = true
 
 	osReleasePath = "/etc/os-release"
 	passwdPath = "/etc/passwd"

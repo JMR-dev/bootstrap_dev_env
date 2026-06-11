@@ -27,7 +27,7 @@ It installs:
 | Workflow | Trigger |
 |---|---|
 | **Unit Tests** — `go test -v ./...` + `go vet ./...` | Pull requests to `main` / `dev` |
-| **Integration Tests** — full run on Debian, Arch, Fedora (Dagger) and macOS (native) | Push + pull requests to `main` / `dev` |
+| **Integration Tests** — full run on Debian, Arch, Fedora, Ubuntu (Dagger) and macOS (native) | Push + pull requests to `main` / `dev` |
 
 ## Install
 

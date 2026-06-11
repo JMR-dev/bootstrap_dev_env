@@ -387,6 +387,28 @@ func userLoginShell(uid string) string {
 	return ""
 }
 
+func isZshDefault() bool {
+	if !hasCmd("zsh") {
+		return false
+	}
+	zshPath := "/bin/zsh"
+	if r, ok := probe([]string{"which", "zsh"}, 5*time.Second); ok && r.ExitCode == 0 {
+		if p := strings.TrimSpace(string(r.Stdout)); p != "" {
+			zshPath = p
+		}
+	}
+	username := invokingUser()
+	if username == "" {
+		return false
+	}
+	u, err := user.Lookup(username)
+	if err != nil {
+		return false
+	}
+	current := userLoginShell(u.Uid)
+	return current == zshPath
+}
+
 func cloneNvimConfig() {
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".config", "nvim")

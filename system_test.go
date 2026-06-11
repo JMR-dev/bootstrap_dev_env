@@ -528,3 +528,135 @@ func TestInstallSystemPackagesAria2First(t *testing.T) {
 	}
 }
 
+func TestInstallLocalAISpecialPkgs(t *testing.T) {
+	defer resetMocks()
+
+	pkgMgr = "apt-get"
+	isMacOS = false
+
+	var runCmdCalls [][]string
+	runCmd = func(argv []string, opts CmdOpts) CmdResult {
+		runCmdCalls = append(runCmdCalls, argv)
+		return CmdResult{ExitCode: 0}
+	}
+
+	var runShellCalls []string
+	runShell = func(cmd string, opts CmdOpts) CmdResult {
+		runShellCalls = append(runShellCalls, cmd)
+		return CmdResult{ExitCode: 0}
+	}
+
+	// 1. nvidia-drivers
+	installSpecialPkg("nvidia-drivers", "/tmp")
+	if len(runCmdCalls) != 1 || runCmdCalls[0][0] != "apt-get" || runCmdCalls[0][3] != "nvidia-driver-550" {
+		t.Errorf("expected apt-get install nvidia-driver-550, got calls: %v", runCmdCalls)
+	}
+
+	// 2. cuda-toolkit
+	runCmdCalls = nil
+	runShellCalls = nil
+	installSpecialPkg("cuda-toolkit", "/tmp")
+	if len(runCmdCalls) < 1 || runCmdCalls[0][3] != "cuda-toolkit" {
+		t.Errorf("expected apt-get install cuda-toolkit, got calls: %v", runCmdCalls)
+	}
+	if len(runShellCalls) != 1 || !strings.Contains(runShellCalls[0], "cuda-keyring") {
+		t.Errorf("expected setupCUDARepo runShell call, got calls: %v", runShellCalls)
+	}
+
+	// 3. nvidia-container-toolkit
+	runCmdCalls = nil
+	runShellCalls = nil
+	installSpecialPkg("nvidia-container-toolkit", "/tmp")
+	if len(runCmdCalls) < 3 || runCmdCalls[0][3] != "nvidia-container-toolkit" {
+		t.Errorf("expected apt-get install nvidia-container-toolkit, got calls: %v", runCmdCalls)
+	}
+	if len(runShellCalls) != 1 || !strings.Contains(runShellCalls[0], "nvidia-container-toolkit.list") {
+		t.Errorf("expected setupNvidiaContainerToolkitRepo runShell call, got calls: %v", runShellCalls)
+	}
+
+	// 4. ollama
+	runCmdCalls = nil
+	runShellCalls = nil
+	installSpecialPkg("ollama", "/tmp")
+	if len(runShellCalls) != 1 || !strings.Contains(runShellCalls[0], "ollama.com/install.sh") {
+		t.Errorf("expected ollama installer runShell call, got calls: %v", runShellCalls)
+	}
+
+	// 5. huggingface-cli
+	runCmdCalls = nil
+	runShellCalls = nil
+	hasCmd = func(name string) bool {
+		return name == "pipx"
+	}
+	installSpecialPkg("huggingface-cli", "/tmp")
+	if len(runCmdCalls) != 1 || runCmdCalls[0][0] != "pipx" || runCmdCalls[0][2] != "huggingface_hub[cli]" {
+		t.Errorf("expected pipx install huggingface_hub[cli], got calls: %v", runCmdCalls)
+	}
+}
+
+func TestIsSpecialPkgInstalledLocalAI(t *testing.T) {
+	defer resetMocks()
+
+	isMacOS = false
+
+	// Test case 1: None of the commands/files exist
+	hasCmd = func(name string) bool { return false }
+	osStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+
+	pkgs := []string{"nvidia-drivers", "cuda-toolkit", "nvidia-container-toolkit", "ollama", "huggingface-cli"}
+	for _, p := range pkgs {
+		if isSpecialPkgInstalled(p) {
+			t.Errorf("expected %s to be not installed", p)
+		}
+	}
+
+	// Test case 2: Check nvidia-drivers
+	hasCmd = func(name string) bool { return name == "nvidia-smi" }
+	if !isSpecialPkgInstalled("nvidia-drivers") {
+		t.Error("expected nvidia-drivers to be installed when nvidia-smi exists")
+	}
+
+	// Test case 3: Check cuda-toolkit via hasCmd
+	hasCmd = func(name string) bool { return name == "nvcc" }
+	if !isSpecialPkgInstalled("cuda-toolkit") {
+		t.Error("expected cuda-toolkit to be installed when nvcc command exists")
+	}
+
+	// Test case 4: Check cuda-toolkit via path existence
+	hasCmd = func(name string) bool { return false }
+	osStat = func(name string) (os.FileInfo, error) {
+		if name == "/usr/local/cuda/bin/nvcc" {
+			return nil, nil // exists
+		}
+		return nil, os.ErrNotExist
+	}
+	if !isSpecialPkgInstalled("cuda-toolkit") {
+		t.Error("expected cuda-toolkit to be installed when /usr/local/cuda/bin/nvcc exists")
+	}
+
+	// Test case 5: Check nvidia-container-toolkit
+	resetMocks()
+	isMacOS = false
+	hasCmd = func(name string) bool { return name == "nvidia-ctk" }
+	if !isSpecialPkgInstalled("nvidia-container-toolkit") {
+		t.Error("expected nvidia-container-toolkit to be installed when nvidia-ctk command exists")
+	}
+
+	// Test case 6: Check ollama
+	resetMocks()
+	isMacOS = false
+	hasCmd = func(name string) bool { return name == "ollama" }
+	if !isSpecialPkgInstalled("ollama") {
+		t.Error("expected ollama to be installed when ollama command exists")
+	}
+
+	// Test case 7: Check huggingface-cli
+	resetMocks()
+	isMacOS = false
+	hasCmd = func(name string) bool { return name == "huggingface-cli" }
+	if !isSpecialPkgInstalled("huggingface-cli") {
+		t.Error("expected huggingface-cli to be installed when huggingface-cli command exists")
+	}
+}
+
+

@@ -127,3 +127,43 @@ func TestRunMainMacos(t *testing.T) {
 		t.Error("expected program to complete successfully on macOS mock run")
 	}
 }
+
+func TestRunMainLocalAIValidation(t *testing.T) {
+	defer resetMocks()
+
+	// 1. macOS validation
+	isMacOS = true
+	pkgMgr = "brew"
+	var exited bool
+	var exitCode int
+	osExit = func(code int) {
+		exited = true
+		exitCode = code
+	}
+	
+	runMain([]string{"bootstrap_environment", "--local-ai"})
+	if !exited {
+		t.Error("expected runMain with --local-ai on macOS to exit")
+	}
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1, got %d", exitCode)
+	}
+
+	// 2. Linux non-apt validation
+	resetMocks()
+	isMacOS = false
+	pkgMgr = "dnf"
+	exited = false
+	osExit = func(code int) {
+		exited = true
+		exitCode = code
+	}
+
+	runMain([]string{"bootstrap_environment", "--local-ai"})
+	if !exited {
+		t.Error("expected runMain with --local-ai on Fedora/dnf to exit")
+	}
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1, got %d", exitCode)
+	}
+}
