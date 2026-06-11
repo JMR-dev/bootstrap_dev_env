@@ -594,3 +594,69 @@ func TestInstallLocalAISpecialPkgs(t *testing.T) {
 	}
 }
 
+func TestIsSpecialPkgInstalledLocalAI(t *testing.T) {
+	defer resetMocks()
+
+	isMacOS = false
+
+	// Test case 1: None of the commands/files exist
+	hasCmd = func(name string) bool { return false }
+	osStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+
+	pkgs := []string{"nvidia-drivers", "cuda-toolkit", "nvidia-container-toolkit", "ollama", "huggingface-cli"}
+	for _, p := range pkgs {
+		if isSpecialPkgInstalled(p) {
+			t.Errorf("expected %s to be not installed", p)
+		}
+	}
+
+	// Test case 2: Check nvidia-drivers
+	hasCmd = func(name string) bool { return name == "nvidia-smi" }
+	if !isSpecialPkgInstalled("nvidia-drivers") {
+		t.Error("expected nvidia-drivers to be installed when nvidia-smi exists")
+	}
+
+	// Test case 3: Check cuda-toolkit via hasCmd
+	hasCmd = func(name string) bool { return name == "nvcc" }
+	if !isSpecialPkgInstalled("cuda-toolkit") {
+		t.Error("expected cuda-toolkit to be installed when nvcc command exists")
+	}
+
+	// Test case 4: Check cuda-toolkit via path existence
+	hasCmd = func(name string) bool { return false }
+	osStat = func(name string) (os.FileInfo, error) {
+		if name == "/usr/local/cuda/bin/nvcc" {
+			return nil, nil // exists
+		}
+		return nil, os.ErrNotExist
+	}
+	if !isSpecialPkgInstalled("cuda-toolkit") {
+		t.Error("expected cuda-toolkit to be installed when /usr/local/cuda/bin/nvcc exists")
+	}
+
+	// Test case 5: Check nvidia-container-toolkit
+	resetMocks()
+	isMacOS = false
+	hasCmd = func(name string) bool { return name == "nvidia-ctk" }
+	if !isSpecialPkgInstalled("nvidia-container-toolkit") {
+		t.Error("expected nvidia-container-toolkit to be installed when nvidia-ctk command exists")
+	}
+
+	// Test case 6: Check ollama
+	resetMocks()
+	isMacOS = false
+	hasCmd = func(name string) bool { return name == "ollama" }
+	if !isSpecialPkgInstalled("ollama") {
+		t.Error("expected ollama to be installed when ollama command exists")
+	}
+
+	// Test case 7: Check huggingface-cli
+	resetMocks()
+	isMacOS = false
+	hasCmd = func(name string) bool { return name == "huggingface-cli" }
+	if !isSpecialPkgInstalled("huggingface-cli") {
+		t.Error("expected huggingface-cli to be installed when huggingface-cli command exists")
+	}
+}
+
+

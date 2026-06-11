@@ -11,6 +11,7 @@ import (
 // don't want the human-facing "[ERROR] ..." prints polluting CI logs
 // (GitHub Actions auto-annotates "[ERROR]" lines as workflow errors).
 func TestMain(m *testing.M) {
+	isTesting = true
 	issueLogWriter = io.Discard
 	disableProgressTracking = true
 	os.Exit(m.Run())

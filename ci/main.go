@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	osFlag := flag.String("os", "all", "OS to test (debian, arch, fedora, or all)")
+	osFlag := flag.String("os", "all", "OS to test (debian, arch, fedora, ubuntu, or all)")
 	flag.Parse()
 
 	ctx := context.Background()

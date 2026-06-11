@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [debian, arch, fedora]
+        os: [debian, arch, fedora, ubuntu]
       fail-fast: false
 
     steps:

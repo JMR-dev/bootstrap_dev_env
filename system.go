@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -458,7 +457,6 @@ func installOllama() {
 	// Pull Gemma 4 E4B and Qwen2.5-Coder 7B
 	fmt.Println("  Pulling Gemma 4 E4B and Qwen2.5-Coder 7B models ...")
 
-	isTesting := flag.Lookup("test.v") != nil || os.Getenv("GO_ENV") == "test"
 	serverRunning := false
 
 	// Check if Ollama server is already responding
