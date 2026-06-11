@@ -185,6 +185,15 @@ func TestRunMainStep0TransitionToStep2(t *testing.T) {
 		}
 		return nil
 	}
+	osStat = func(name string) (os.FileInfo, error) {
+		if strings.HasSuffix(name, "/go") ||
+			strings.HasSuffix(name, "/firecracker") ||
+			strings.HasSuffix(name, "/nvim") ||
+			strings.HasSuffix(name, ".oh-my-zsh") {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
 
 	hasCmd = func(name string) bool {
 		return true // all installed
