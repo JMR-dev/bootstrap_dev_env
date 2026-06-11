@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,6 +100,17 @@ func TestRunMainStep2Exit(t *testing.T) {
 func TestRunMainStep0OnlyZshGitCurl(t *testing.T) {
 	defer resetMocks()
 
+	u, _ := user.Current()
+	uid := "1000"
+	username := os.Getenv("USER")
+	if u != nil {
+		uid = u.Uid
+		username = u.Username
+	}
+	if username == "" {
+		username = "user"
+	}
+
 	// Mock file read to return nothing (step=0)
 	var writtenData []byte
 	osReadFile = func(name string) ([]byte, error) {
@@ -106,7 +118,7 @@ func TestRunMainStep0OnlyZshGitCurl(t *testing.T) {
 			return nil, os.ErrNotExist
 		}
 		if strings.HasSuffix(name, "/etc/passwd") {
-			return []byte(fmt.Sprintf("%s:x:1000:1000::/home/user:/bin/bash\n", os.Getenv("USER"))), nil
+			return []byte(fmt.Sprintf("%s:x:%s:%s::/home/user:/bin/bash\n", username, uid, uid)), nil
 		}
 		return nil, os.ErrNotExist
 	}
@@ -165,6 +177,17 @@ func TestRunMainStep0OnlyZshGitCurl(t *testing.T) {
 func TestRunMainStep0TransitionToStep2(t *testing.T) {
 	defer resetMocks()
 
+	u, _ := user.Current()
+	uid := "1000"
+	username := os.Getenv("USER")
+	if u != nil {
+		uid = u.Uid
+		username = u.Username
+	}
+	if username == "" {
+		username = "user"
+	}
+
 	// Zsh default is true, oh-my-zsh and zsh/git/curl already installed
 	// Under step=0, we should transition directly to step=1 and then execute step 2 in the same run.
 	var writtenData []byte
@@ -174,7 +197,7 @@ func TestRunMainStep0TransitionToStep2(t *testing.T) {
 		}
 		if strings.HasSuffix(name, "/etc/passwd") {
 			// passwd already says zsh is default shell
-			return []byte(fmt.Sprintf("%s:x:1000:1000::/home/user:/bin/zsh\n", os.Getenv("USER"))), nil
+			return []byte(fmt.Sprintf("%s:x:%s:%s::/home/user:/bin/zsh\n", username, uid, uid)), nil
 		}
 		return nil, os.ErrNotExist
 	}
